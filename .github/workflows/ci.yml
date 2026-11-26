@@ -1,0 +1,21 @@
+name: PowerShell CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run synthetic log tests
+        shell: powershell
+        run: powershell.exe -NoProfile -File .\tests\Run-Tests.ps1
+      - name: Parse PowerShell source
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\src\ApacheJbossLogAnalyzer.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }

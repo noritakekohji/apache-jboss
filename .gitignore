@@ -1,0 +1,15 @@
+# common.gitignore の内容も必ず併せて使うこと
+
+# PowerShell test output
+TestResults.xml
+coverage.xml
+
+# Module build output
+Output/
+publish/
+.psscriptanalyzer/
+
+# Local analysis data
+*.log
+*.html
+*.csv
