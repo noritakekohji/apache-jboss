@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -11,7 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Fixed
 
+## [0.1.1] - 2026-11-27
+
+### Fixed
+- Windows PowerShell 5.1 UTF-8 source compatibility.
+- Apache Combined parsing when no response-time field exists.
+- CI test for the self-contained hourly HTML chart.
+
 ## [0.1.0] - 2026-11-26
 
 ### Added
-- 初回版の設計、PowerShell GUI、Apache/JBoss/GCログ解析、HTML/CSV出力、合成ログテスト
+- Initial design, PowerShell GUI, Apache/JBoss/GC parsing, HTML/CSV exports, and synthetic log tests.
