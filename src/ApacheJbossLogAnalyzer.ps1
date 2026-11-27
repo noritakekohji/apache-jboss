@@ -282,7 +282,7 @@ function Export-AnalysisHtml {
     }
     $gcRows = foreach ($gcEvent in @($GcEvents | Sort-Object Time | Select-Object -First 200)) {
         $eventTime = if ($null -ne $gcEvent.Time) { $gcEvent.Time.ToString('yyyy-MM-dd HH:mm:ss.fff') } elseif ($null -ne $gcEvent.ElapsedSeconds) { 'uptime {0}s' -f $gcEvent.ElapsedSeconds } else { 'time unavailable' }
-        '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}/{6} MB</td><td>{7} MB</td></tr>' -f (ConvertTo-SafeHtml $eventTime), (ConvertTo-SafeHtml $gcEvent.Kind), (ConvertTo-SafeHtml $gcEvent.Cause), $gcEvent.DurationMs, (ConvertTo-SafeHtml $gcEvent.HeapBeforeMb), (ConvertTo-SafeHtml $gcEvent.HeapAfterMb), (ConvertTo-SafeHtml $gcEvent.HeapCapacityMb), (ConvertTo-SafeHtml ([IO.Path]::GetFileName($gcEvent.Source)))
+        '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}/{5} MB</td><td>{6} MB</td><td>{7}</td></tr>' -f (ConvertTo-SafeHtml $eventTime), (ConvertTo-SafeHtml $gcEvent.Kind), (ConvertTo-SafeHtml $gcEvent.Cause), $gcEvent.DurationMs, (ConvertTo-SafeHtml $gcEvent.HeapBeforeMb), (ConvertTo-SafeHtml $gcEvent.HeapAfterMb), (ConvertTo-SafeHtml $gcEvent.HeapCapacityMb), (ConvertTo-SafeHtml ([IO.Path]::GetFileName($gcEvent.Source)))
     }
     $jbossRows = foreach ($jbossEvent in @($Events | Where-Object Level -in @('ERROR','FATAL') | Select-Object -First 100)) {
         '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td></tr>' -f (ConvertTo-SafeHtml $jbossEvent.Time.ToString('yyyy-MM-dd HH:mm:ss.fff')), (ConvertTo-SafeHtml $jbossEvent.Level), (ConvertTo-SafeHtml ([IO.Path]::GetFileName($jbossEvent.Source))), $jbossEvent.Line
