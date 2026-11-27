@@ -19,9 +19,10 @@ try {
     Assert-Equal 10 $apache.Records[0].Time.Hour 'Apache timezone normalization'
     Assert-Equal $null $apache.Records[1].DurationMs 'Standard Combined has no duration'
     $apachePath2 = Join-Path $temp 'access-2.log'
-    '127.0.0.1 - - [26/Nov/2026:10:03:00 +0900] "GET /second HTTP/1.1" 201 12 "-" "test" 0.050' | Set-Content -LiteralPath $apachePath2 -Encoding utf8
+    @('127.0.0.1 - - [26/Nov/2026:10:00:00 +0900] "GET /home?token=secret HTTP/1.1" 200 123 "-" "test" 0.125','127.0.0.1 - - [26/Nov/2026:10:00:00 +0900] "GET /home?token=secret HTTP/1.1" 200 123 "-" "test" 0.125','127.0.0.1 - - [26/Nov/2026:10:03:00 +0900] "GET /second HTTP/1.1" 201 12 "-" "test" 0.050') | Set-Content -LiteralPath $apachePath2 -Encoding utf8
     $apacheCombined = Read-ApacheAccessLog @($apachePath,$apachePath2)
-    Assert-Equal 4 $apacheCombined.Records.Count 'Apache multiple files concatenate'
+    Assert-Equal 5 $apacheCombined.Records.Count 'Apache removes cross-file overlap but keeps within-file repeats'
+    Assert-Equal 1 $apacheCombined.DuplicateCount 'Apache duplicate line count'
     Assert-Equal $apachePath2 $apacheCombined.Records[3].Source 'Apache concatenation preserves source'
     $rangeStart = [datetime]::ParseExact('2026-11-26 10:00:00','yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
     $rangeEnd = [datetime]::ParseExact('2026-11-26 10:02:00','yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
@@ -37,9 +38,10 @@ try {
     Assert-Equal 10 $jboss.Records[0].Time.Hour 'JBoss assumed JST'
     Assert-Equal 1 $jboss.Issues.Count 'JBoss issue count'
     $jbossPath2 = Join-Path $temp 'server-2.log'
-    '2026-11-26 10:02:01,123 INFO [org.example] next' | Set-Content -LiteralPath $jbossPath2 -Encoding utf8
+    @('2026-11-26 10:00:01,123 ERROR [org.example] failed','2026-11-26 10:00:01,123 ERROR [org.example] failed','2026-11-26 10:02:01,123 INFO [org.example] next') | Set-Content -LiteralPath $jbossPath2 -Encoding utf8
     $jbossCombined=Read-JBossLog @($jbossPath,$jbossPath2)
-    Assert-Equal 2 $jbossCombined.Records.Count 'JBoss multiple files concatenate'
+    Assert-Equal 3 $jbossCombined.Records.Count 'JBoss removes cross-file overlap but keeps within-file repeats'
+    Assert-Equal 1 $jbossCombined.DuplicateCount 'JBoss duplicate line count'
     Assert-Equal $jbossPath2 $jbossCombined.Records[1].Source 'JBoss concatenation preserves source'
 
     $gcPath = Join-Path $temp 'gc.log'
@@ -56,10 +58,11 @@ try {
     Assert-Equal 10 $gc.Records[4].ElapsedSeconds 'Uptime Full GC start'
     Assert-Equal 70 $gc.Records[5].ElapsedSeconds 'Uptime Full GC end'
     $gcPath2=Join-Path $temp 'gc-2.log'
-    '[80.0s][info][gc] GC(7) Pause Full 100M->40M(512M) 5.0ms' | Set-Content -LiteralPath $gcPath2 -Encoding utf8
+    @('[0.500s][info][gc] GC(4) Pause Young (Normal) 80M->10M(512M) 2.3ms','[0.500s][info][gc] GC(4) Pause Young (Normal) 80M->10M(512M) 2.3ms','[80.0s][info][gc] GC(7) Pause Full 100M->40M(512M) 5.0ms') | Set-Content -LiteralPath $gcPath2 -Encoding utf8
     $gcCombined=Read-GcLog @($gcPath,$gcPath2)
-    Assert-Equal 7 $gcCombined.Records.Count 'GC multiple files concatenate'
-    Assert-Equal $gcPath2 $gcCombined.Records[6].Source 'GC concatenation preserves source'
+    Assert-Equal 8 $gcCombined.Records.Count 'GC removes cross-file overlap but keeps within-file repeats'
+    Assert-Equal 1 $gcCombined.DuplicateCount 'GC duplicate line count'
+    Assert-Equal $gcPath2 $gcCombined.Records[7].Source 'GC concatenation preserves source'
     $gcTimedPath = Join-Path $temp 'gc-timed.log'
     '[2026-11-26T10:04:00.000+09:00][info][gc] GC(8) Pause Full 100M->40M(512M) 5.0ms' | Set-Content -LiteralPath $gcTimedPath -Encoding utf8
     $gcTimed = Read-GcLog @($gcPath, $gcTimedPath)
@@ -84,12 +87,16 @@ try {
     $html = Get-Content -LiteralPath $htmlPath -Raw
     if ($html.Contains('token=secret')) { throw 'HTML report leaked query string' }
     if (-not $html.Contains('フルGC')) { throw 'HTML report omitted full GC summary label' }
-    if (-not $html.Contains('class="chart"')) { throw 'HTML report omitted hourly chart' }
+    if (-not $html.Contains('class="chart"')) { throw 'HTML report omitted request chart' }
     if (-not $html.Contains('heap-chart')) { throw 'HTML report omitted heap graph' }
     if (-not $html.Contains('125/50 MB')) { throw 'HTML report omitted heap event detail' }
     if (-not $html.Contains('pause-chart')) { throw 'HTML report omitted pause chart' }
-    if (-not $html.Contains('data-kind="hourly-chart"')) { throw 'HTML report omitted hourly chart' }
-    if (-not $html.Contains('リクエスト数（件/時）')) { throw 'HTML report omitted request axis units' }
+    if (-not $html.Contains('data-kind="request-chart"')) { throw 'HTML report omitted request chart' }
+    if (-not $html.Contains('リクエスト数（件/5分）')) { throw 'HTML report omitted request axis units' }
+    if (-not $html.Contains('10:00')) { throw 'HTML report omitted five-minute time label' }
+    if (-not $html.Contains('合計 3 件')) { throw 'Five-minute bucket did not aggregate requests' }
+    if (-not $html.Contains('HTTPエラー 1 件')) { throw 'Five-minute request chart omitted error count' }
+    if (-not $html.Contains('完全一致重複行を除外: 0 行')) { throw 'HTML report omitted duplicate count' }
     if (-not $html.Contains('停止時間（ms）')) { throw 'HTML report omitted GC pause axis units' }
     if (-not $html.Contains('ヒープ使用量（MB）')) { throw 'HTML report omitted heap axis units' }
     if (-not $html.Contains('横軸: 時刻（JST）')) { throw 'HTML report omitted GC time axis explanation' }
@@ -98,11 +105,18 @@ try {
     if (-not $html.Contains('時刻を記録していないヒープイベント: 3 件')) { throw 'HTML report omitted untimed heap count' }
     $rangeHtmlPath = Join-Path $temp 'range-report.html'
     $rangeSummary = Get-AnalysisSummary $apacheRange.Records $jboss.Records $gcRange.Records
-    Export-AnalysisHtml $rangeSummary $apacheRange.Records $jboss.Records $gcRange.Records $rangeHtmlPath $rangeStart $rangeEnd $gcRange.UntimedCount
+    Export-AnalysisHtml $rangeSummary $apacheRange.Records $jboss.Records $gcRange.Records $rangeHtmlPath $rangeStart $rangeEnd $gcRange.UntimedCount 3
     $rangeHtml = Get-Content -LiteralPath $rangeHtmlPath -Raw
     if (-not $rangeHtml.Contains('対象期間: 2026-11-26 10:00 〜 2026-11-26 10:02 JST')) { throw 'HTML report omitted selected time range' }
     if (-not $rangeHtml.Contains('期間内か判別できない時刻なしレコード（GCを含む）: 4 件')) { throw 'HTML report omitted untimed exclusion count' }
+    if (-not $rangeHtml.Contains('完全一致重複行を除外: 3 行')) { throw 'HTML report omitted duplicate exclusion count' }
     if (-not $html.Contains('class="grid"')) { throw 'HTML report omitted labeled chart grid ticks' }
+    $denseRequests = for($minute=0;$minute -lt 60;$minute+=5){[pscustomobject]@{Time=$rangeStart.AddHours(1).AddMinutes($minute);Status=200;DurationMs=10;Url='/test';Method='GET'}}
+    $denseBuckets = @($denseRequests | Group-Object { $_.Time.AddMinutes(-($_.Time.Minute % 5)).ToString('yyyy-MM-dd HH:mm') } | Sort-Object Name)
+    $denseChart = Get-ReportBarChart $denseBuckets 'Dense test' '件/5分' 'five-minute'
+    $denseLabels = [regex]::Matches($denseChart,'<text x="[^"]+" y="245"')
+    Assert-Equal 7 $denseLabels.Count 'Dense time axis keeps labels readable'
+    if (-not $denseChart.Contains('11:00') -or -not $denseChart.Contains('11:55')) { throw 'Dense chart omitted endpoint time labels' }
     if ($html.Contains('failed')) { throw 'HTML report included raw JBoss log text' }
 
     $csvPath = Join-Path $temp 'requests.csv'
@@ -121,7 +135,7 @@ try {
     $launcher = [IO.File]::ReadAllText($launcherPath)
     if ($launcher -notmatch '(?im)^powershell\.exe .*?-ExecutionPolicy Bypass .*?-File "%SCRIPT_PATH%"') { throw 'Launcher must apply process-scoped ExecutionPolicy Bypass' }
     if ($launcher -match '(?im)^\s*Set-ExecutionPolicy\b') { throw 'Launcher must not change a persistent execution policy' }
-    'PASS: 63 assertions'
+    'PASS: 75 assertions'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

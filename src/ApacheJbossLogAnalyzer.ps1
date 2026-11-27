@@ -41,11 +41,17 @@ function Read-ApacheAccessLog {
     param([string[]]$Path)
     $records = [Collections.Generic.List[object]]::new()
     $issues = [Collections.Generic.List[object]]::new()
+    $seenLines = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $duplicateCount = 0
     $pattern = '^(?<host>\S+) \S+ \S+ \[(?<time>[^\]]+)\] "(?<method>\S+) (?<url>\S+) (?<protocol>[^"]+)" (?<status>\d{3}) (?<bytes>\S+)(?: "(?<referer>[^"]*)" "(?<agent>[^"]*)")?(?: (?<duration>\d+(?:\.\d+)?))?$'
     foreach ($file in $Path) {
+        $seenInFile = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $lineNo = 0
         foreach ($line in [IO.File]::ReadLines($file)) {
             $lineNo++
+            $isFirstInFile = $seenInFile.Add($line)
+            if ($isFirstInFile -and $seenLines.Contains($line)) { $duplicateCount++; continue }
+            [void]$seenLines.Add($line)
             if ($line -notmatch $pattern) { $issues.Add([pscustomobject]@{ File=$file; Line=$lineNo; Reason='Apache access log format not recognized'; Text=$line }); continue }
             $timestampOffset = [DateTimeOffset]::MinValue
             if (-not [DateTimeOffset]::TryParseExact($Matches.time, 'dd/MMM/yyyy:HH:mm:ss zzz', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$timestampOffset)) {
@@ -59,18 +65,24 @@ function Read-ApacheAccessLog {
             $records.Add([pscustomobject]@{ Time=$timestamp; Method=$Matches.method; Url=$Matches.url; Status=[int]$Matches.status; Bytes=$Matches.bytes; DurationMs=$duration; Source=$file; Line=$lineNo; Kind='Request' })
         }
     }
-    return [pscustomobject]@{ Records=$records; Issues=$issues }
+    return [pscustomobject]@{ Records=$records; Issues=$issues; DuplicateCount=$duplicateCount }
 }
 
 function Read-JBossLog {
     param([string[]]$Path)
     $records = [Collections.Generic.List[object]]::new()
     $issues = [Collections.Generic.List[object]]::new()
+    $seenLines = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $duplicateCount = 0
     $pattern = '^(?<time>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d{3})?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?<level>TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\s+(?<message>.*)$'
     foreach ($file in $Path) {
+        $seenInFile = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $lineNo = 0
         foreach ($line in [IO.File]::ReadLines($file)) {
             $lineNo++
+            $isFirstInFile = $seenInFile.Add($line)
+            if ($isFirstInFile -and $seenLines.Contains($line)) { $duplicateCount++; continue }
+            [void]$seenLines.Add($line)
             if ($line -notmatch $pattern) { $issues.Add([pscustomobject]@{ File=$file; Line=$lineNo; Reason='JBoss timestamp/level format not recognized'; Text=$line }); continue }
             $stampText = $Matches.time.Replace('T',' ')
             $stampText = $stampText -replace '(\d{2}),(\d{3})','$1.$2'
@@ -79,17 +91,23 @@ function Read-JBossLog {
             $records.Add([pscustomobject]@{ Time=$timestamp; Level=$Matches.level; Message=$Matches.message; Source=$file; Line=$lineNo; Kind='JBoss' })
         }
     }
-    return [pscustomobject]@{ Records=$records; Issues=$issues }
+    return [pscustomobject]@{ Records=$records; Issues=$issues; DuplicateCount=$duplicateCount }
 }
 
 function Read-GcLog {
     param([string[]]$Path)
     $records = [Collections.Generic.List[object]]::new()
     $issues = [Collections.Generic.List[object]]::new()
+    $seenLines = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $duplicateCount = 0
     foreach ($file in $Path) {
+        $seenInFile = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $lineNo = 0
         foreach ($line in [IO.File]::ReadLines($file)) {
             $lineNo++
+            $isFirstInFile = $seenInFile.Add($line)
+            if ($isFirstInFile -and $seenLines.Contains($line)) { $duplicateCount++; continue }
+            [void]$seenLines.Add($line)
             if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^(?:CommandLine flags:|Java HotSpot\(TM\)|Using .+ collector|\[Times: user=|\[Heap (?:before|after) GC|\[?(?:Eden|From Space|To Space|PSYoungGen|ParOldGen|ParNew|DefNew|Tenured|G1 Eden Space):|Desired survivor size\b)') { continue }
 
             $timestamp = $null
@@ -159,7 +177,7 @@ function Read-GcLog {
             $records.Add([pscustomobject]@{ Time=$timestamp; ElapsedSeconds=$elapsedSeconds; Kind=$kind; Cause=$cause; DurationMs=$durationMs; HeapBeforeMb=$heapBefore; HeapAfterMb=$heapAfter; HeapCapacityMb=$heapCapacity; Source=$file; Line=$lineNo; Message=$line })
         }
     }
-    return [pscustomobject]@{ Records=$records; Issues=$issues }
+    return [pscustomobject]@{ Records=$records; Issues=$issues; DuplicateCount=$duplicateCount }
 }
 
 function ConvertTo-GcMegabyte {
@@ -249,15 +267,15 @@ function Select-RecordsInTimeRange {
 }
 
 function Export-AnalysisHtml {
-    param([object]$Summary,[object[]]$Requests,[object[]]$Events,[object[]]$GcEvents,[string]$Path,[datetime]$StartTime,[datetime]$EndTime,[int]$UntimedExcludedCount=0)
+    param([object]$Summary,[object[]]$Requests,[object[]]$Events,[object[]]$GcEvents,[string]$Path,[datetime]$StartTime,[datetime]$EndTime,[int]$UntimedExcludedCount=0,[int]$DuplicateCount=0)
     $reportTime = [DateTimeOffset]::Now.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-dd HH:mm:ss')
     $periodText = if ($StartTime -and $EndTime) { '{0} 〜 {1} JST' -f $StartTime.ToString('yyyy-MM-dd HH:mm'),$EndTime.ToString('yyyy-MM-dd HH:mm') } else { '期間指定なし' }
-    $requestBuckets = @($Requests | Where-Object { $null -ne $_.Time } | Group-Object { $_.Time.ToString('yyyy-MM-dd HH:00') } | Sort-Object Name)
+    $requestBuckets = @($Requests | Where-Object { $null -ne $_.Time } | Group-Object { $_.Time.AddMinutes(-($_.Time.Minute % 5)).ToString('yyyy-MM-dd HH:mm') } | Sort-Object Name)
     $pauseEvents = @($GcEvents | Where-Object { $null -ne $_.DurationMs -and $null -ne $_.Time } | Sort-Object Time)
     $heapEvents = @($GcEvents | Where-Object { $null -ne $_.HeapAfterMb -and $null -ne $_.Time } | Sort-Object Time)
     $untimedPauseCount = @($GcEvents | Where-Object { $null -ne $_.DurationMs -and $null -eq $_.Time }).Count
     $untimedHeapCount = @($GcEvents | Where-Object { $null -ne $_.HeapAfterMb -and $null -eq $_.Time }).Count
-    $requestSvg = Get-ReportBarChart $requestBuckets '時間帯別リクエスト数' 'リクエスト数（件/時）' 'hourly'
+    $requestSvg = Get-ReportBarChart $requestBuckets '5分単位のリクエスト数' 'リクエスト数（件/5分）' 'five-minute'
     $pauseSvg = Get-ReportBarChart $pauseEvents 'GC停止時間' '停止時間（ms）' 'pause'
     $heapSvg = Get-ReportHeapChart $heapEvents
     $gcRows = foreach ($gcEvent in @($GcEvents | Sort-Object Time | Select-Object -First 200)) {
@@ -275,7 +293,7 @@ function Export-AnalysisHtml {
 <style>body{font:15px/1.55 "Segoe UI",Meiryo,sans-serif;max-width:1200px;margin:0 auto;padding:24px;color:#182b40;background:#f4f7fb}h1{color:#123c62}h2{margin:0 0 .6rem;color:#174b72}.intro,.panel{background:#fff;border:1px solid #dbe4ed;border-radius:12px;padding:20px;margin:16px 0}.muted,small{color:#526579}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.card{background:#edf4fa;border-left:4px solid #2878ad;padding:12px;border-radius:7px}.card b{font-size:1.2rem}.chart{width:100%;height:auto;display:block}.chart text{font:12px "Segoe UI",Meiryo,sans-serif;fill:#34495e}.grid{stroke:#d9e2eb}.axis{stroke:#60758a}.bar{fill:#277eae}.pause{fill:#c94d4d}.heap-line{fill:none;stroke:#277eae;stroke-width:3}.heap-point{fill:#c94d4d}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #dbe4ed;padding:.55rem;text-align:left}th{background:#edf4fa}.table-wrap{overflow:auto;max-height:480px}.note{background:#fff7df;border-left:4px solid #d89d16;padding:12px}.empty{fill:#60758a}.legend{display:inline-block;width:12px;height:12px;margin:0 5px 0 14px;border-radius:2px}.legend-blue{background:#277eae}.legend-red{background:#c94d4d}</style>
 <header class="intro"><h1>Apache / JBoss ログ分析レポート</h1><p>生成日時: $reportTime JST</p><p>対象期間: $periodText</p><p class="muted">各グラフに軸の値と単位を表示します。</p></header><section class="panel"><h2>概要</h2><div class="cards">
 <div class="card">リクエスト<br><b>$($Summary.RequestCount)</b></div><div class="card">HTTPエラー<br><b>$($Summary.HttpErrors) ($($Summary.HttpErrorRate)%)</b></div><div class="card">p95 応答時間<br><b>$($Summary.P95Ms) ms</b></div><div class="card">JBoss ERROR<br><b>$($Summary.JBossErrors)</b></div><div class="card">フルGC<br><b>$($Summary.FullGcCount) 回</b></div><div class="card">フルGC停止合計<br><b>$($Summary.FullGcPauseMs) ms</b></div><div class="card">GC停止 min / avg / max<br><b>$($Summary.MinGcPauseMs) / $($Summary.AvgGcPauseMs) / $($Summary.MaxGcPauseMs) ms</b></div><div class="card">Full GC間隔 min / max<br><b>$($Summary.MinFullGcIntervalMin) / $($Summary.MaxFullGcIntervalMin) 分</b></div></div>
-<p class="muted">HTTPエラーは400以上。標準Combinedには応答時間がない場合があります。指定期間内のレコードのみを集計しています。</p><p class="muted">期間内か判別できない時刻なしレコード（GCを含む）: $UntimedExcludedCount 件（出力対象外）</p></section><section class="panel"><h2>時間帯別リクエスト数</h2><p class="muted"><span class="legend legend-blue"></span>全リクエスト <span class="legend legend-red"></span>HTTPエラー<br>縦軸: 件/時、横軸: 時刻（JST）。</p>$requestSvg</section><section class="panel"><h2>GC停止時間</h2><p class="muted">縦軸: 停止時間（ms）、横軸: 時刻（JST）。</p>$pauseSvg<p class="muted">時刻を記録していないGC停止イベント: $untimedPauseCount 件（グラフ対象外）</p></section><section class="panel"><h2>GC後ヒープ使用量</h2><p class="muted">縦軸: 使用量（MB）、横軸: 時刻（JST）。</p>$heapSvg<p class="muted">時刻を記録していないヒープイベント: $untimedHeapCount 件（グラフ対象外）</p></section>
+<p class="muted">HTTPエラーは400以上。標準Combinedには応答時間がない場合があります。指定期間内のレコードのみを集計しています。</p><p class="muted">複数ファイル間などの完全一致重複行を除外: $DuplicateCount 行。</p><p class="muted">期間内か判別できない時刻なしレコード（GCを含む）: $UntimedExcludedCount 件（出力対象外）</p></section><section class="panel"><h2>5分単位のリクエスト数</h2><p class="muted"><span class="legend legend-blue"></span>正常系 <span class="legend legend-red"></span>HTTPエラー<br>縦軸: 件/5分、横軸: 時刻（JST）。時刻ラベルは読みやすさのため間引いています。</p>$requestSvg</section><section class="panel"><h2>GC停止時間</h2><p class="muted">縦軸: 停止時間（ms）、横軸: 時刻（JST）。時刻ラベルは読みやすさのため間引いています。</p>$pauseSvg<p class="muted">時刻を記録していないGC停止イベント: $untimedPauseCount 件（グラフ対象外）</p></section><section class="panel"><h2>GC後ヒープ使用量</h2><p class="muted">縦軸: 使用量（MB）、横軸: 時刻（JST）。</p>$heapSvg<p class="muted">時刻を記録していないヒープイベント: $untimedHeapCount 件（グラフ対象外）</p></section>
 <section class="panel"><h2>GCイベント詳細</h2><p>平均停止: $($Summary.AvgGcPauseMs) ms / 最大停止: $($Summary.MaxGcPauseMs) ms / Full GC間隔: $($Summary.MinFullGcIntervalMin)〜$($Summary.MaxFullGcIntervalMin) 分</p><div class="table-wrap"><table><thead><tr><th>時刻</th><th>種別</th><th>原因</th><th>停止(ms)</th><th>ヒープ前/後(MB)</th><th>最大ヒープ(MB)</th><th>ファイル</th></tr></thead><tbody>$($gcRows -join "`n")</tbody></table></div></section><section class="panel"><h2>JBossエラー行</h2><p>本文を含めず、ファイル名と行番号のみ表示します。</p><div class="table-wrap"><table><thead><tr><th>時刻(JST)</th><th>レベル</th><th>ファイル</th><th>行</th></tr></thead><tbody>$($jbossRows -join "`n")</tbody></table></div></section><section class="panel"><h2>遅延上位リクエスト</h2><p>応答時間がある場合のみ表示し、URLクエリを除去します。</p><div class="table-wrap"><table><thead><tr><th>時刻</th><th>Method</th><th>Path</th><th>Status</th><th>ms</th></tr></thead><tbody>$($rows -join "`n")</tbody></table></div></section><section class="panel note"><b>注意</b><p>時刻の近接は因果関係を意味しません。リクエストID未確認のためApache/JBoss間を自動対応付けしません。ログ本文とURLクエリは含めません。</p></section></html>
 "@
     [IO.File]::WriteAllText($Path,$html,[Text.UTF8Encoding]::new($true))
@@ -283,14 +301,32 @@ function Export-AnalysisHtml {
 
 function Get-ReportBarChart {
     param([object[]]$Items,[string]$Title,[string]$AxisLabel,[string]$Mode)
-    $left=72;$top=22;$plotW=790;$plotH=205;$max=1.0;$values=if($Mode -eq 'hourly'){@($Items|ForEach-Object{[double]$_.Count})}else{@($Items|ForEach-Object{[double]$_.DurationMs})}
-    $values=@($values);if($values.Count -eq 0){return '<svg class="chart" viewBox="0 0 900 300" role="img" aria-label="{0}"><text class="empty" x="80" y="150">対象データがありません</text></svg>' -f (ConvertTo-SafeHtml $Title)}
+    $left=72;$top=22;$plotW=790;$plotH=205
+    $isRequestChart=$Mode -eq 'five-minute'
+    $values=if($isRequestChart){@($Items|ForEach-Object{[double]$_.Count})}else{@($Items|ForEach-Object{[double]$_.DurationMs})}
+    $values=@($values)
+    if($values.Count -eq 0){return '<svg class="chart" viewBox="0 0 900 300" role="img" aria-label="{0}"><text class="empty" x="80" y="150">対象データがありません</text></svg>' -f (ConvertTo-SafeHtml $Title)}
     $max=($values|Measure-Object -Maximum).Maximum;if($max -le 0){$max=1};$step=[math]::Max(1,[math]::Ceiling($max/4));$svg=[Collections.Generic.List[string]]::new()
+    $isMultiDay=$false
+    if(-not $isRequestChart){$isMultiDay=$Items[0].Time.Date -ne $Items[$Items.Count-1].Time.Date}
     for($tick=0;$tick -le $max;$tick+=$step){$y=$top+$plotH-($tick/$max*$plotH);$svg.Add(('<line class="grid" x1="{0}" y1="{1}" x2="{2}" y2="{1}"/><text x="{3}" y="{4}" text-anchor="end">{5}</text>' -f $left,$y,($left+$plotW),($left-10),($y+4),$tick))}
-    $svg.Add(('<text x="16" y="{0}" transform="rotate(-90 16 {0})" text-anchor="middle">{1}</text><text x="{2}" y="{3}" text-anchor="middle">時刻（JST）</text>' -f ($top+$plotH/2),(ConvertTo-SafeHtml $AxisLabel),($left+$plotW/2),292))
-    $slot=$plotW/$values.Count;$barW=[math]::Max(2,$slot*0.64)
-    for($i=0;$i -lt $values.Count;$i++){$x=$left+$slot*$i+($slot-$barW)/2;$barH=$values[$i]/$max*$plotH;$y=$top+$plotH-$barH;$label=if($Mode -eq 'hourly'){$Items[$i].Name.Substring(11,2)}else{$Items[$i].Time.ToString('HH:mm:ss')};$cls=if($Mode -eq 'pause'){'pause'}else{'bar'};$tip=if($Mode -eq 'hourly'){'{0}: {1} 件、HTTPエラー {2} 件' -f $Items[$i].Name,$Items[$i].Count,@($Items[$i].Group|Where-Object Status -ge 400).Count}else{'{0}: {1} ms' -f $Items[$i].Time.ToString('yyyy-MM-dd HH:mm:ss'),$values[$i]};$svg.Add(('<rect class="{0}" x="{1}" y="{2}" width="{3}" height="{4}"><title>{5}</title></rect><text x="{6}" y="{7}" text-anchor="middle">{8}</text>' -f $cls,$x,$y,$barW,[math]::Max(1,$barH),(ConvertTo-SafeHtml $tip),($x+$barW/2),($top+$plotH+18),(ConvertTo-SafeHtml $label)))}
-    return '<svg class="chart" data-kind="{0}" viewBox="0 0 900 300" role="img" aria-label="{1}">{2}</svg>' -f $(if($Mode -eq 'pause'){'pause-chart'}else{'hourly-chart'}),(ConvertTo-SafeHtml $Title),($svg -join '')
+    $svg.Add(('<text x="16" y="{0}" transform="rotate(-90 16 {0})" text-anchor="middle">{1}</text><text x="{2}" y="292" text-anchor="middle">時刻（JST）</text>' -f ($top+$plotH/2),(ConvertTo-SafeHtml $AxisLabel),($left+$plotW/2)))
+    $slot=$plotW/$values.Count;$barW=[math]::Max(2,$slot*0.64);$labelStep=[math]::Max(1,[math]::Ceiling(($values.Count-1)/7))
+    for($i=0;$i -lt $values.Count;$i++){
+        $x=$left+$slot*$i+($slot-$barW)/2;$barH=$values[$i]/$max*$plotH;$y=$top+$plotH-$barH
+        if($isRequestChart){
+            $errorCount=@($Items[$i].Group|Where-Object Status -ge 400).Count;$normalCount=$values[$i]-$errorCount;$errorHeight=$errorCount/$max*$plotH;$normalHeight=$normalCount/$max*$plotH
+            if($normalHeight -gt 0){$svg.Add(('<rect class="bar" x="{0}" y="{1}" width="{2}" height="{3}"><title>{4}: 合計 {5} 件、HTTPエラー {6} 件</title></rect>' -f $x,($y+$errorHeight),$barW,$normalHeight,(ConvertTo-SafeHtml $Items[$i].Name),$Items[$i].Count,$errorCount))}
+            if($errorHeight -gt 0){$svg.Add(('<rect class="pause" x="{0}" y="{1}" width="{2}" height="{3}"><title>{4}: 合計 {5} 件、HTTPエラー {6} 件</title></rect>' -f $x,$y,$barW,$errorHeight,(ConvertTo-SafeHtml $Items[$i].Name),$Items[$i].Count,$errorCount))}
+            $bucketTime=[datetime]::ParseExact($Items[$i].Name,'yyyy-MM-dd HH:mm',[Globalization.CultureInfo]::InvariantCulture)
+            $isMultiDay=([datetime]::ParseExact($Items[$values.Count-1].Name,'yyyy-MM-dd HH:mm',[Globalization.CultureInfo]::InvariantCulture).Date -gt [datetime]::ParseExact($Items[0].Name,'yyyy-MM-dd HH:mm',[Globalization.CultureInfo]::InvariantCulture).Date)
+            $label=if($isMultiDay){$bucketTime.ToString('MM/dd HH:mm')}else{$bucketTime.ToString('HH:mm')}
+        }else{
+            $timeLabel=$Items[$i].Time.ToString('yyyy-MM-dd HH:mm:ss');$svg.Add(('<rect class="pause" x="{0}" y="{1}" width="{2}" height="{3}"><title>{4}: {5} ms</title></rect>' -f $x,$y,$barW,[math]::Max(1,$barH),(ConvertTo-SafeHtml $timeLabel),$values[$i]));$label=if($isMultiDay){$Items[$i].Time.ToString('MM/dd HH:mm')}else{$Items[$i].Time.ToString('HH:mm')}
+        }
+        if(($i%$labelStep -eq 0)-or($i -eq $values.Count-1)){$svg.Add(('<text x="{0}" y="{1}" text-anchor="middle">{2}</text>' -f ($x+$barW/2),($top+$plotH+18),(ConvertTo-SafeHtml $label)))}
+    }
+    return '<svg class="chart" data-kind="{0}" viewBox="0 0 900 300" role="img" aria-label="{1}">{2}</svg>' -f $(if($Mode -eq 'pause'){'pause-chart'}else{'request-chart'}),(ConvertTo-SafeHtml $Title),($svg -join '')
 }
 
 function Get-ReportHeapChart {
@@ -299,7 +335,7 @@ function Get-ReportHeapChart {
     if($Items.Count -eq 0){return '<svg class="chart heap-chart" viewBox="0 0 900 300"><text class="empty" x="80" y="150">ヒープ情報がありません</text></svg>'}
     $max=($Items|ForEach-Object{[double]$_.HeapAfterMb}|Measure-Object -Maximum).Maximum;if($max -le 0){$max=1};$step=[math]::Max(1,[math]::Ceiling($max/4));$svg=[Collections.Generic.List[string]]::new();for($tick=0;$tick -le $max;$tick+=$step){$y=$top+$plotH-($tick/$max*$plotH);$svg.Add(('<line class="grid" x1="{0}" y1="{1}" x2="{2}" y2="{1}"/><text x="{3}" y="{4}" text-anchor="end">{5} MB</text>' -f $left,$y,($left+$plotW),($left-10),($y+4),$tick))}
     $points=[Collections.Generic.List[string]]::new();$marks=[Collections.Generic.List[string]]::new();$slot=if($Items.Count -eq 1){0}else{$plotW/($Items.Count-1)};for($i=0;$i -lt $Items.Count;$i++){$x=$left+$(if($Items.Count -eq 1){$plotW/2}else{$slot*$i});$y=$top+$plotH-([double]$Items[$i].HeapAfterMb/$max*$plotH);$time=$Items[$i].Time.ToString('yyyy-MM-dd HH:mm:ss');$points.Add(('{0},{1}' -f $x,$y));$marks.Add(('<circle class="heap-point" cx="{0}" cy="{1}" r="4"><title>{2}: {3} MB</title></circle>' -f $x,$y,$time,$Items[$i].HeapAfterMb))}
-    $svg.Add('<polyline class="heap-line" points="'+($points -join ' ')+'"/>');$svg.AddRange([string[]]$marks.ToArray());$labels=@(0,[math]::Floor(($Items.Count-1)/2),($Items.Count-1)|Select-Object -Unique);foreach($index in $labels){$x=$left+$(if($Items.Count -eq 1){$plotW/2}else{$slot*$index});$label=$Items[$index].Time.ToString('HH:mm:ss');$svg.Add(('<text x="{0}" y="{1}" text-anchor="middle">{2}</text>' -f $x,($top+$plotH+18),(ConvertTo-SafeHtml $label)))};$svg.Add(('<text x="16" y="{0}" transform="rotate(-90 16 {0})" text-anchor="middle">ヒープ使用量（MB）</text><text x="{1}" y="292" text-anchor="middle">時刻（JST）</text>' -f ($top+$plotH/2),($left+$plotW/2)));return '<svg class="chart heap-chart" viewBox="0 0 900 300">{0}</svg>' -f ($svg -join '')
+    $svg.Add('<polyline class="heap-line" points="'+($points -join ' ')+'"/>');$svg.AddRange([string[]]$marks.ToArray());$labelStep=[math]::Max(1,[math]::Ceiling(($Items.Count-1)/5));$isMultiDay=$Items[0].Time.Date -ne $Items[$Items.Count-1].Time.Date;$seenLabels=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);for($i=0;$i -lt $Items.Count;$i++){if(($i%$labelStep -ne 0)-and($i -ne $Items.Count-1)){continue};$label=if($isMultiDay){$Items[$i].Time.ToString('MM/dd HH:mm')}else{$Items[$i].Time.ToString('HH:mm')};if(-not $seenLabels.Add($label)){continue};$x=$left+$(if($Items.Count -eq 1){$plotW/2}else{$slot*$i});$svg.Add(('<text x="{0}" y="{1}" text-anchor="middle">{2}</text>' -f $x,($top+$plotH+18),(ConvertTo-SafeHtml $label)))};$svg.Add(('<text x="16" y="{0}" transform="rotate(-90 16 {0})" text-anchor="middle">ヒープ使用量（MB）</text><text x="{1}" y="292" text-anchor="middle">時刻（JST）</text>' -f ($top+$plotH/2),($left+$plotW/2)));return '<svg class="chart heap-chart" viewBox="0 0 900 300">{0}</svg>' -f ($svg -join '')
 }
 
 function Show-LogAnalyzerGui {
@@ -464,12 +500,13 @@ function Show-LogAnalyzerGui {
             $summary = Get-AnalysisSummary $rangeRequests $rangeEvents $rangeGcEvents
             $outputFolder = $destinationPath.Text
             $untimedCount = $apacheInRange.UntimedCount + $jbossInRange.UntimedCount + $gcInRange.UntimedCount
-            Export-AnalysisHtml $summary $rangeRequests $rangeEvents $rangeGcEvents (Join-Path $outputFolder 'apache-jboss-report.html') $startTime $endTime $untimedCount
+            $duplicateCount = $apacheResult.DuplicateCount + $jbossResult.DuplicateCount + $gcResult.DuplicateCount
+            Export-AnalysisHtml $summary $rangeRequests $rangeEvents $rangeGcEvents (Join-Path $outputFolder 'apache-jboss-report.html') $startTime $endTime $untimedCount $duplicateCount
             Export-AnalysisCsv $rangeRequests (Join-Path $outputFolder 'requests.csv')
             Export-AnalysisCsv @($rangeEvents | Select-Object Time, Level, Source, Line) (Join-Path $outputFolder 'jboss-events.csv')
             Export-AnalysisCsv @($rangeGcEvents | Select-Object Time, ElapsedSeconds, Kind, Cause, DurationMs, HeapBeforeMb, HeapAfterMb, HeapCapacityMb, Source, Line) (Join-Path $outputFolder 'gc-events.csv')
             $issueCount = $apacheResult.Issues.Count + $jbossResult.Issues.Count + $gcResult.Issues.Count
-            $output.Text = "解析完了`r`n対象期間（JST）: $($startTime.ToString('yyyy/MM/dd HH:mm')) 〜 $($endTime.ToString('yyyy/MM/dd HH:mm'))`r`n範囲内リクエスト: $($summary.RequestCount) / HTTPエラー: $($summary.HttpErrors)`r`n範囲内JBoss ERROR/FATAL: $($summary.JBossErrors) / Full GC: $($summary.FullGcCount)`r`n時刻がなく範囲判定できない行: $untimedCount / 未認識行: $issueCount`r`n`r`n出力先: $outputFolder`r`napache-jboss-report.html`r`nrequests.csv / jboss-events.csv / gc-events.csv"
+            $output.Text = "解析完了`r`n対象期間（JST）: $($startTime.ToString('yyyy/MM/dd HH:mm')) 〜 $($endTime.ToString('yyyy/MM/dd HH:mm'))`r`n範囲内リクエスト: $($summary.RequestCount) / HTTPエラー: $($summary.HttpErrors)`r`n範囲内JBoss ERROR/FATAL: $($summary.JBossErrors) / Full GC: $($summary.FullGcCount)`r`n完全一致の重複行を除外: $duplicateCount 行`r`n時刻がなく範囲判定できない行: $untimedCount / 未認識行: $issueCount`r`n`r`n出力先: $outputFolder`r`napache-jboss-report.html`r`nrequests.csv / jboss-events.csv / gc-events.csv"
         } catch { $output.Text = "解析に失敗しました`r`n$($_.Exception.Message)" } finally { $runButton.Enabled = $true; $form.Cursor = 'Default' }
     }.GetNewClosure())
     [void]$form.ShowDialog()

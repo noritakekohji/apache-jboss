@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Fixed
 
+## [0.6.0] - 2026-11-27
+
+### Added
+- 同一種別の複数ファイル間で完全一致するログ行の重複除外と除外数表示。
+- アクセス数の5分単位集計と、密な時刻軸ラベルの間引き。
+
 ## [0.5.0] - 2026-11-27
 
 ### Added
