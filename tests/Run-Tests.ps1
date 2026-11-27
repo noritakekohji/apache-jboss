@@ -55,6 +55,9 @@ try {
     $gcCombined=Read-GcLog @($gcPath,$gcPath2)
     Assert-Equal 7 $gcCombined.Records.Count 'GC multiple files concatenate'
     Assert-Equal $gcPath2 $gcCombined.Records[6].Source 'GC concatenation preserves source'
+    $gcTimedPath = Join-Path $temp 'gc-timed.log'
+    '[2026-11-26T10:04:00.000+09:00][info][gc] GC(8) Pause Full 100M->40M(512M) 5.0ms' | Set-Content -LiteralPath $gcTimedPath -Encoding utf8
+    $gcTimed = Read-GcLog @($gcPath, $gcTimedPath)
 
     $summary = Get-AnalysisSummary $apache.Records $jboss.Records $gc.Records
     Assert-Equal 3 $summary.RequestCount 'Summary request count'
@@ -69,7 +72,7 @@ try {
     Assert-Equal '&lt;script&gt;' (ConvertTo-SafeHtml '<script>') 'HTML escaping'
 
     $htmlPath = Join-Path $temp 'report.html'
-    Export-AnalysisHtml $summary $apache.Records $jboss.Records $gc.Records $htmlPath
+    Export-AnalysisHtml $summary $apache.Records $jboss.Records $gcTimed.Records $htmlPath
     $html = Get-Content -LiteralPath $htmlPath -Raw
     if ($html.Contains('token=secret')) { throw 'HTML report leaked query string' }
     if (-not $html.Contains('フルGC')) { throw 'HTML report omitted full GC summary label' }
@@ -81,6 +84,10 @@ try {
     if (-not $html.Contains('リクエスト数（件/時）')) { throw 'HTML report omitted request axis units' }
     if (-not $html.Contains('停止時間（ms）')) { throw 'HTML report omitted GC pause axis units' }
     if (-not $html.Contains('ヒープ使用量（MB）')) { throw 'HTML report omitted heap axis units' }
+    if (-not $html.Contains('横軸: 時刻（JST）')) { throw 'HTML report omitted GC time axis explanation' }
+    if (-not $html.Contains('2026-11-26 10:04:00')) { throw 'GC chart omitted wall-clock time label' }
+    if (-not $html.Contains('時刻を記録していないGC停止イベント: 4 件')) { throw 'HTML report omitted untimed pause count' }
+    if (-not $html.Contains('時刻を記録していないヒープイベント: 3 件')) { throw 'HTML report omitted untimed heap count' }
     if (-not $html.Contains('class="grid"')) { throw 'HTML report omitted labeled chart grid ticks' }
     if ($html.Contains('failed')) { throw 'HTML report included raw JBoss log text' }
 
@@ -100,7 +107,7 @@ try {
     $launcher = [IO.File]::ReadAllText($launcherPath)
     if ($launcher -notmatch '(?im)^powershell\.exe .*?-ExecutionPolicy Bypass .*?-File "%SCRIPT_PATH%"') { throw 'Launcher must apply process-scoped ExecutionPolicy Bypass' }
     if ($launcher -match '(?im)^\s*Set-ExecutionPolicy\b') { throw 'Launcher must not change a persistent execution policy' }
-    'PASS: 53 assertions'
+    'PASS: 57 assertions'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

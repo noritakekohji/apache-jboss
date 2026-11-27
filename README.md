@@ -17,7 +17,7 @@ Apache response-time statistics require an optional trailing duration field in s
 
 ## GC analysis
 
-The self-contained HTML report includes GC pause summaries and charts, full-GC intervals, post-GC heap trends, and event details. Charts label their axes and units; reports include interpretation notes. GC CSV includes event kind, cause, pause duration, heap before/after/capacity, and source line. Supported inputs are representative Java 8 legacy and Java 9+ unified JVM log patterns, not every collector or JDK release. Known parallel-GC detail phases such as `Adjust Pointers` are excluded from collection totals.
+The self-contained HTML report includes GC pause summaries and charts, full-GC intervals, post-GC heap trends, and event details. All chart time axes use JST. GC events without a wall-clock timestamp are omitted from time-series charts and their counts are shown. Charts label their axes and units; reports include interpretation notes. GC CSV includes event kind, cause, pause duration, heap before/after/capacity, and source line. Supported inputs are representative Java 8 legacy and Java 9+ unified JVM log patterns, not every collector or JDK release. Known parallel-GC detail phases such as `Adjust Pointers` are excluded from collection totals.
 
 The feature set takes inspiration from GCViewer's changelog, but this project has its own implementation. See [docs/design.md](docs/design.md) for supported patterns and limitations.
 

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Fixed
 
+## [0.4.1] - 2026-11-27
+
+### Changed
+- GC停止時間とヒープ推移の横軸もJST時刻に統一し、時刻不明イベントの件数を注記。
+
 ## [0.4.0] - 2026-11-27
 
 ### Added
