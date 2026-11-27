@@ -16,6 +16,7 @@ try {
     Assert-Equal 1 $apache.Issues.Count 'Apache issue count'
     Assert-Equal 125 $apache.Records[0].DurationMs 'Apache duration conversion'
     Assert-Equal 200 $apache.Records[0].Status 'Apache status'
+    Assert-Equal 10 $apache.Records[0].Time.Hour 'Apache timezone normalization'
     Assert-Equal $null $apache.Records[1].DurationMs 'Standard Combined has no duration'
 
     $jbossPath = Join-Path $temp 'server.log'
@@ -23,20 +24,32 @@ try {
     $jboss = Read-JBossLog @($jbossPath)
     Assert-Equal 1 $jboss.Records.Count 'JBoss parsed count'
     Assert-Equal 'ERROR' $jboss.Records[0].Level 'JBoss level'
+    Assert-Equal 10 $jboss.Records[0].Time.Hour 'JBoss assumed JST'
     Assert-Equal 1 $jboss.Issues.Count 'JBoss issue count'
 
     $gcPath = Join-Path $temp 'gc.log'
-    '2026-11-26T10:00:02.000+0900: [Full GC (Ergonomics) 0.250 secs]' | Set-Content -LiteralPath $gcPath -Encoding utf8
+    @('2026-11-26T10:00:02.000+0900: [Full GC (Ergonomics) 125M->50M(512M), 0.250 secs]','[2026-11-26T10:01:02.500+09:00][info][gc] GC(3) Pause Full (System.gc()) 250M->80M(512M) 15.7ms','Total time for which application threads were stopped: 0.020 seconds','[2026-11-26T10:01:03.000+09:00][info][gc] GC(3) Adjust Pointers 1.4ms','[0.500s][info][gc] GC(4) Pause Young (Normal) 80M->10M(512M) 2.3ms','[10.0s][info][gc] GC(5) Pause Full 125M->50M(512M) 4.0ms','[70.0s][info][gc] GC(6) Pause Full 125M->50M(512M) 3.0ms') | Set-Content -LiteralPath $gcPath -Encoding utf8
     $gc = Read-GcLog @($gcPath)
-    Assert-Equal 1 $gc.Records.Count 'GC parsed count'
+    Assert-Equal 6 $gc.Records.Count 'GC parsed count'
+    Assert-Equal 0 $gc.Issues.Count 'GC known phases ignored'
     Assert-Equal 250 $gc.Records[0].DurationMs 'GC duration conversion'
+    Assert-Equal 125 $gc.Records[0].HeapBeforeMb 'Legacy GC heap before'
+    Assert-Equal 80 $gc.Records[1].HeapAfterMb 'Unified GC heap after'
+    Assert-Equal 10 $gc.Records[1].Time.Hour 'Unified GC timezone normalization'
+    Assert-Equal 'Application Stopped' $gc.Records[2].Kind 'Application stop event'
+    Assert-Equal 0.5 $gc.Records[3].ElapsedSeconds 'Uptime unified GC event'
+    Assert-Equal 10 $gc.Records[4].ElapsedSeconds 'Uptime Full GC start'
+    Assert-Equal 70 $gc.Records[5].ElapsedSeconds 'Uptime Full GC end'
 
     $summary = Get-AnalysisSummary $apache.Records $jboss.Records $gc.Records
     Assert-Equal 3 $summary.RequestCount 'Summary request count'
     Assert-Equal 1 $summary.HttpErrors 'Summary HTTP errors'
     Assert-Equal 33.33 $summary.HttpErrorRate 'Summary HTTP error rate'
     Assert-Equal 1 $summary.JBossErrors 'Summary JBoss errors'
-    Assert-Equal 1 $summary.FullGcCount 'Summary full GC count'
+    Assert-Equal 4 $summary.FullGcCount 'Summary full GC count'
+    Assert-Equal 1 $summary.MinFullGcIntervalMin 'Summary uptime Full GC interval'
+    Assert-Equal 2.3 $summary.MinGcPauseMs 'Summary min pause'
+    Assert-Equal 250 $summary.MaxGcPauseMs 'Summary max pause'
     Assert-Equal "'=1+1" (ConvertTo-CsvSafeValue '=1+1' | ForEach-Object { $_.Trim('"') }) 'CSV injection prefix'
     Assert-Equal '&lt;script&gt;' (ConvertTo-SafeHtml '<script>') 'HTML escaping'
 
@@ -46,6 +59,10 @@ try {
     if ($html.Contains('token=secret')) { throw 'HTML report leaked query string' }
     if (-not $html.Contains('フルGC')) { throw 'HTML report omitted full GC summary label' }
     if (-not $html.Contains('class="chart"')) { throw 'HTML report omitted hourly chart' }
+    if (-not $html.Contains('class="heap-chart"')) { throw 'HTML report omitted heap graph' }
+    if (-not $html.Contains('125/50 MB')) { throw 'HTML report omitted heap event detail' }
+    if (-not $html.Contains('pause-chart')) { throw 'HTML report omitted pause chart' }
+    if ($html.Contains('failed')) { throw 'HTML report included raw JBoss log text' }
 
     $csvPath = Join-Path $temp 'requests.csv'
     Export-AnalysisCsv $apache.Records $csvPath
@@ -53,7 +70,12 @@ try {
     $bytes = [IO.File]::ReadAllBytes($csvPath)
     if ($bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) { throw 'CSV must include UTF-8 BOM for Excel' }
     if ($csv.Contains('token=secret')) { throw 'CSV request URL should be query-free by default' }
-    'PASS: 22 assertions'
+
+    $emptyHtml = Join-Path $temp 'empty.html'
+    $emptySummary = Get-AnalysisSummary @() @() @()
+    Export-AnalysisHtml $emptySummary @() @() @() $emptyHtml
+    if (-not (Test-Path -LiteralPath $emptyHtml)) { throw 'Empty inputs should still produce an HTML report' }
+    'PASS: 40 assertions'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 ### Changed
 ### Fixed
+
+## [0.2.0] - 2026-11-27
+
+### Added
+- GCViewerの分析機能を参考に、GCイベント詳細、停止時間の統計とグラフ、GC後ヒープ推移、Full GC間隔、前後ヒープ量のCSV出力を追加。
+- Java 8系のGCログ、JVM統合GCログ、アプリケーション停止時間イベントの代表形式に対応。
 
 ## [0.1.1] - 2026-11-27
 
