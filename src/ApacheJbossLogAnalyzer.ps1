@@ -237,9 +237,21 @@ function Export-AnalysisCsv {
     } finally { $writer.Dispose() }
 }
 
+function Select-RecordsInTimeRange {
+    param([object[]]$Records,[datetime]$StartTime,[datetime]$EndTime)
+    $matched = [Collections.Generic.List[object]]::new()
+    $withoutTime = 0
+    foreach ($record in $Records) {
+        if ($null -eq $record.Time) { $withoutTime++; continue }
+        if ($record.Time -ge $StartTime -and $record.Time -le $EndTime) { $matched.Add($record) }
+    }
+    return [pscustomobject]@{ Records=@($matched.ToArray()); UntimedCount=$withoutTime }
+}
+
 function Export-AnalysisHtml {
-    param([object]$Summary,[object[]]$Requests,[object[]]$Events,[object[]]$GcEvents,[string]$Path)
+    param([object]$Summary,[object[]]$Requests,[object[]]$Events,[object[]]$GcEvents,[string]$Path,[datetime]$StartTime,[datetime]$EndTime,[int]$UntimedExcludedCount=0)
     $reportTime = [DateTimeOffset]::Now.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-dd HH:mm:ss')
+    $periodText = if ($StartTime -and $EndTime) { '{0} 〜 {1} JST' -f $StartTime.ToString('yyyy-MM-dd HH:mm'),$EndTime.ToString('yyyy-MM-dd HH:mm') } else { '期間指定なし' }
     $requestBuckets = @($Requests | Where-Object { $null -ne $_.Time } | Group-Object { $_.Time.ToString('yyyy-MM-dd HH:00') } | Sort-Object Name)
     $pauseEvents = @($GcEvents | Where-Object { $null -ne $_.DurationMs -and $null -ne $_.Time } | Sort-Object Time)
     $heapEvents = @($GcEvents | Where-Object { $null -ne $_.HeapAfterMb -and $null -ne $_.Time } | Sort-Object Time)
@@ -261,9 +273,9 @@ function Export-AnalysisHtml {
     $html = @"
 <!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Apache / JBoss ログ分析</title>
 <style>body{font:15px/1.55 "Segoe UI",Meiryo,sans-serif;max-width:1200px;margin:0 auto;padding:24px;color:#182b40;background:#f4f7fb}h1{color:#123c62}h2{margin:0 0 .6rem;color:#174b72}.intro,.panel{background:#fff;border:1px solid #dbe4ed;border-radius:12px;padding:20px;margin:16px 0}.muted,small{color:#526579}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.card{background:#edf4fa;border-left:4px solid #2878ad;padding:12px;border-radius:7px}.card b{font-size:1.2rem}.chart{width:100%;height:auto;display:block}.chart text{font:12px "Segoe UI",Meiryo,sans-serif;fill:#34495e}.grid{stroke:#d9e2eb}.axis{stroke:#60758a}.bar{fill:#277eae}.pause{fill:#c94d4d}.heap-line{fill:none;stroke:#277eae;stroke-width:3}.heap-point{fill:#c94d4d}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #dbe4ed;padding:.55rem;text-align:left}th{background:#edf4fa}.table-wrap{overflow:auto;max-height:480px}.note{background:#fff7df;border-left:4px solid #d89d16;padding:12px}.empty{fill:#60758a}.legend{display:inline-block;width:12px;height:12px;margin:0 5px 0 14px;border-radius:2px}.legend-blue{background:#277eae}.legend-red{background:#c94d4d}</style>
-<header class="intro"><h1>Apache / JBoss ログ分析レポート</h1><p>生成日時: $reportTime JST</p><p class="muted">各グラフに軸の値と単位を表示します。</p></header><section class="panel"><h2>概要</h2><div class="cards">
+<header class="intro"><h1>Apache / JBoss ログ分析レポート</h1><p>生成日時: $reportTime JST</p><p>対象期間: $periodText</p><p class="muted">各グラフに軸の値と単位を表示します。</p></header><section class="panel"><h2>概要</h2><div class="cards">
 <div class="card">リクエスト<br><b>$($Summary.RequestCount)</b></div><div class="card">HTTPエラー<br><b>$($Summary.HttpErrors) ($($Summary.HttpErrorRate)%)</b></div><div class="card">p95 応答時間<br><b>$($Summary.P95Ms) ms</b></div><div class="card">JBoss ERROR<br><b>$($Summary.JBossErrors)</b></div><div class="card">フルGC<br><b>$($Summary.FullGcCount) 回</b></div><div class="card">フルGC停止合計<br><b>$($Summary.FullGcPauseMs) ms</b></div><div class="card">GC停止 min / avg / max<br><b>$($Summary.MinGcPauseMs) / $($Summary.AvgGcPauseMs) / $($Summary.MaxGcPauseMs) ms</b></div><div class="card">Full GC間隔 min / max<br><b>$($Summary.MinFullGcIntervalMin) / $($Summary.MaxFullGcIntervalMin) 分</b></div></div>
-<p class="muted">HTTPエラーは400以上。標準Combinedには応答時間がない場合があります。</p></section><section class="panel"><h2>時間帯別リクエスト数</h2><p class="muted"><span class="legend legend-blue"></span>全リクエスト <span class="legend legend-red"></span>HTTPエラー<br>縦軸: 件/時、横軸: 時刻（JST）。</p>$requestSvg</section><section class="panel"><h2>GC停止時間</h2><p class="muted">縦軸: 停止時間（ms）、横軸: 時刻（JST）。</p>$pauseSvg<p class="muted">時刻を記録していないGC停止イベント: $untimedPauseCount 件（グラフ対象外）</p></section><section class="panel"><h2>GC後ヒープ使用量</h2><p class="muted">縦軸: 使用量（MB）、横軸: 時刻（JST）。</p>$heapSvg<p class="muted">時刻を記録していないヒープイベント: $untimedHeapCount 件（グラフ対象外）</p></section>
+<p class="muted">HTTPエラーは400以上。標準Combinedには応答時間がない場合があります。指定期間内のレコードのみを集計しています。</p><p class="muted">期間内か判別できない時刻なしレコード（GCを含む）: $UntimedExcludedCount 件（出力対象外）</p></section><section class="panel"><h2>時間帯別リクエスト数</h2><p class="muted"><span class="legend legend-blue"></span>全リクエスト <span class="legend legend-red"></span>HTTPエラー<br>縦軸: 件/時、横軸: 時刻（JST）。</p>$requestSvg</section><section class="panel"><h2>GC停止時間</h2><p class="muted">縦軸: 停止時間（ms）、横軸: 時刻（JST）。</p>$pauseSvg<p class="muted">時刻を記録していないGC停止イベント: $untimedPauseCount 件（グラフ対象外）</p></section><section class="panel"><h2>GC後ヒープ使用量</h2><p class="muted">縦軸: 使用量（MB）、横軸: 時刻（JST）。</p>$heapSvg<p class="muted">時刻を記録していないヒープイベント: $untimedHeapCount 件（グラフ対象外）</p></section>
 <section class="panel"><h2>GCイベント詳細</h2><p>平均停止: $($Summary.AvgGcPauseMs) ms / 最大停止: $($Summary.MaxGcPauseMs) ms / Full GC間隔: $($Summary.MinFullGcIntervalMin)〜$($Summary.MaxFullGcIntervalMin) 分</p><div class="table-wrap"><table><thead><tr><th>時刻</th><th>種別</th><th>原因</th><th>停止(ms)</th><th>ヒープ前/後(MB)</th><th>最大ヒープ(MB)</th><th>ファイル</th></tr></thead><tbody>$($gcRows -join "`n")</tbody></table></div></section><section class="panel"><h2>JBossエラー行</h2><p>本文を含めず、ファイル名と行番号のみ表示します。</p><div class="table-wrap"><table><thead><tr><th>時刻(JST)</th><th>レベル</th><th>ファイル</th><th>行</th></tr></thead><tbody>$($jbossRows -join "`n")</tbody></table></div></section><section class="panel"><h2>遅延上位リクエスト</h2><p>応答時間がある場合のみ表示し、URLクエリを除去します。</p><div class="table-wrap"><table><thead><tr><th>時刻</th><th>Method</th><th>Path</th><th>Status</th><th>ms</th></tr></thead><tbody>$($rows -join "`n")</tbody></table></div></section><section class="panel note"><b>注意</b><p>時刻の近接は因果関係を意味しません。リクエストID未確認のためApache/JBoss間を自動対応付けしません。ログ本文とURLクエリは含めません。</p></section></html>
 "@
     [IO.File]::WriteAllText($Path,$html,[Text.UTF8Encoding]::new($true))
@@ -303,8 +315,8 @@ function Show-LogAnalyzerGui {
     $layout.Dock = 'Fill'
     $layout.Padding = [Windows.Forms.Padding]::new(18)
     $layout.ColumnCount = 1
-    $layout.RowCount = 5
-    foreach ($rowStyle in @([Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('Percent', 55), [Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('Absolute', 54), [Windows.Forms.RowStyle]::new('Percent', 45))) { $layout.RowStyles.Add($rowStyle) | Out-Null }
+    $layout.RowCount = 6
+    foreach ($rowStyle in @([Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('Percent', 50), [Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('Absolute', 54), [Windows.Forms.RowStyle]::new('Percent', 40))) { $layout.RowStyles.Add($rowStyle) | Out-Null }
     $form.Controls.Add($layout)
     $intro = [Windows.Forms.Label]::new()
     $intro.Text = 'ログ種別ごとに複数ファイルを追加し、まとめて解析します。ファイルは一覧の順に読み込みます。'
@@ -369,7 +381,36 @@ function Show-LogAnalyzerGui {
     $destinationRow.Dock = 'Fill'
     $destinationRow.WrapContents = $false
     $destinationRow.Padding = [Windows.Forms.Padding]::new(0, 5, 0, 5)
-    $layout.Controls.Add($destinationRow, 0, 2)
+    $rangeRow = [Windows.Forms.FlowLayoutPanel]::new()
+    $rangeRow.Dock = 'Fill'
+    $rangeRow.WrapContents = $false
+    $rangeRow.Padding = [Windows.Forms.Padding]::new(0, 5, 0, 5)
+    $layout.Controls.Add($rangeRow, 0, 2)
+    $rangeLabel = [Windows.Forms.Label]::new()
+    $rangeLabel.Text = '対象期間（JST）'
+    $rangeLabel.AutoSize = $true
+    $rangeLabel.Padding = [Windows.Forms.Padding]::new(0, 7, 0, 0)
+    $rangeRow.Controls.Add($rangeLabel)
+    $rangeStart = [Windows.Forms.DateTimePicker]::new()
+    $rangeStart.Format = 'Custom'
+    $rangeStart.CustomFormat = 'yyyy/MM/dd HH:mm'
+    $rangeStart.ShowUpDown = $true
+    $rangeStart.Width = 145
+    $rangeStart.Value = [datetime]::Today.AddDays(-1)
+    $rangeRow.Controls.Add($rangeStart)
+    $rangeTo = [Windows.Forms.Label]::new()
+    $rangeTo.Text = '〜'
+    $rangeTo.AutoSize = $true
+    $rangeTo.Padding = [Windows.Forms.Padding]::new(4, 7, 4, 0)
+    $rangeRow.Controls.Add($rangeTo)
+    $rangeEnd = [Windows.Forms.DateTimePicker]::new()
+    $rangeEnd.Format = 'Custom'
+    $rangeEnd.CustomFormat = 'yyyy/MM/dd HH:mm'
+    $rangeEnd.ShowUpDown = $true
+    $rangeEnd.Width = 145
+    $rangeEnd.Value = [datetime]::Now
+    $rangeRow.Controls.Add($rangeEnd)
+    $layout.Controls.Add($destinationRow, 0, 3)
     $destinationLabel = [Windows.Forms.Label]::new()
     $destinationLabel.Text = '出力先'
     $destinationLabel.AutoSize = $true
@@ -390,7 +431,7 @@ function Show-LogAnalyzerGui {
     $output.ScrollBars = 'Vertical'
     $output.Dock = 'Fill'
     $output.BackColor = [Drawing.Color]::White
-    $layout.Controls.Add($output, 0, 4)
+    $layout.Controls.Add($output, 0, 5)
     $runButton = [Windows.Forms.Button]::new()
     $runButton.Text = '解析してHTML / CSVを出力'
     $runButton.Height = 38
@@ -398,27 +439,37 @@ function Show-LogAnalyzerGui {
     $runButton.BackColor = [Drawing.Color]::FromArgb(32, 105, 155)
     $runButton.ForeColor = [Drawing.Color]::White
     $runButton.FlatStyle = 'Flat'
-    $layout.Controls.Add($runButton, 0, 3)
+    $layout.Controls.Add($runButton, 0, 4)
     $runButton.Add_Click({
         try {
             $paths = @{}
             foreach ($index in 0..2) { $paths[$index] = @($inputs[$index].Items | ForEach-Object { [string]$_ }); foreach ($file in $paths[$index]) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "ファイルが見つかりません: $file" } } }
             if (($paths.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum -eq 0) { throw '少なくとも1つのログファイルを追加してください。' }
             if (-not (Test-Path -LiteralPath $destinationPath.Text -PathType Container)) { throw '出力先フォルダーが見つかりません。' }
+            $startTime = $rangeStart.Value
+            $endTime = $rangeEnd.Value
+            if ($startTime -gt $endTime) { throw '開始日時は終了日時以前にしてください。' }
             $runButton.Enabled = $false
             $form.Cursor = 'WaitCursor'
             $output.Text = '解析しています…'
             $apacheResult = Read-ApacheAccessLog $paths[0]
             $jbossResult = Read-JBossLog $paths[1]
             $gcResult = Read-GcLog $paths[2]
-            $summary = Get-AnalysisSummary $apacheResult.Records $jbossResult.Records $gcResult.Records
+            $apacheInRange = Select-RecordsInTimeRange $apacheResult.Records $startTime $endTime
+            $jbossInRange = Select-RecordsInTimeRange $jbossResult.Records $startTime $endTime
+            $gcInRange = Select-RecordsInTimeRange $gcResult.Records $startTime $endTime
+            $rangeRequests = $apacheInRange.Records
+            $rangeEvents = $jbossInRange.Records
+            $rangeGcEvents = $gcInRange.Records
+            $summary = Get-AnalysisSummary $rangeRequests $rangeEvents $rangeGcEvents
             $outputFolder = $destinationPath.Text
-            Export-AnalysisHtml $summary $apacheResult.Records $jbossResult.Records $gcResult.Records (Join-Path $outputFolder 'apache-jboss-report.html')
-            Export-AnalysisCsv $apacheResult.Records (Join-Path $outputFolder 'requests.csv')
-            Export-AnalysisCsv @($jbossResult.Records | Select-Object Time, Level, Source, Line) (Join-Path $outputFolder 'jboss-events.csv')
-            Export-AnalysisCsv @($gcResult.Records | Select-Object Time, ElapsedSeconds, Kind, Cause, DurationMs, HeapBeforeMb, HeapAfterMb, HeapCapacityMb, Source, Line) (Join-Path $outputFolder 'gc-events.csv')
+            $untimedCount = $apacheInRange.UntimedCount + $jbossInRange.UntimedCount + $gcInRange.UntimedCount
+            Export-AnalysisHtml $summary $rangeRequests $rangeEvents $rangeGcEvents (Join-Path $outputFolder 'apache-jboss-report.html') $startTime $endTime $untimedCount
+            Export-AnalysisCsv $rangeRequests (Join-Path $outputFolder 'requests.csv')
+            Export-AnalysisCsv @($rangeEvents | Select-Object Time, Level, Source, Line) (Join-Path $outputFolder 'jboss-events.csv')
+            Export-AnalysisCsv @($rangeGcEvents | Select-Object Time, ElapsedSeconds, Kind, Cause, DurationMs, HeapBeforeMb, HeapAfterMb, HeapCapacityMb, Source, Line) (Join-Path $outputFolder 'gc-events.csv')
             $issueCount = $apacheResult.Issues.Count + $jbossResult.Issues.Count + $gcResult.Issues.Count
-            $output.Text = "解析完了`r`nリクエスト: $($summary.RequestCount) / HTTPエラー: $($summary.HttpErrors)`r`nJBoss ERROR/FATAL: $($summary.JBossErrors) / Full GC: $($summary.FullGcCount)`r`n未認識行: $issueCount`r`n`r`n出力先: $outputFolder`r`napache-jboss-report.html`r`nrequests.csv / jboss-events.csv / gc-events.csv"
+            $output.Text = "解析完了`r`n対象期間（JST）: $($startTime.ToString('yyyy/MM/dd HH:mm')) 〜 $($endTime.ToString('yyyy/MM/dd HH:mm'))`r`n範囲内リクエスト: $($summary.RequestCount) / HTTPエラー: $($summary.HttpErrors)`r`n範囲内JBoss ERROR/FATAL: $($summary.JBossErrors) / Full GC: $($summary.FullGcCount)`r`n時刻がなく範囲判定できない行: $untimedCount / 未認識行: $issueCount`r`n`r`n出力先: $outputFolder`r`napache-jboss-report.html`r`nrequests.csv / jboss-events.csv / gc-events.csv"
         } catch { $output.Text = "解析に失敗しました`r`n$($_.Exception.Message)" } finally { $runButton.Enabled = $true; $form.Cursor = 'Default' }
     }.GetNewClosure())
     [void]$form.ShowDialog()

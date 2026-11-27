@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Fixed
 
+## [0.5.0] - 2026-11-27
+
+### Added
+- GUIで開始・終了日時（JST）を指定し、範囲内のレコードだけをHTML/CSVへ出力。
+- 期間内か判定できない時刻なしレコードの件数を画面とHTMLに表示。
+
 ## [0.4.1] - 2026-11-27
 
 ### Changed

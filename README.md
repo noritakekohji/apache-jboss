@@ -9,7 +9,7 @@ Windows PowerShell 5.1 GUI for local analysis of Apache access, JBoss server, an
 
 ## Run
 
-Double-click `Start-ApacheJbossLogAnalyzer.bat`. Add one or more files in each log-type tab; files are analyzed in the order shown. Select the output folder (Desktop by default), then choose Analyze. The HTML report and three CSV files are written there.
+Double-click `Start-ApacheJbossLogAnalyzer.bat`. Add one or more files in each log-type tab; files are analyzed in the order shown. Set the inclusive start and end date/time in JST. Only records within that period are included in the summary, HTML report, and CSV files. Records without a wall-clock timestamp cannot be assigned to the period, so they are omitted and counted in the report. Select the output folder (Desktop by default), then choose Analyze.
 
 The launcher starts `powershell.exe` with `-ExecutionPolicy Bypass` for that process only. It does not change machine or user execution-policy settings and does not request administrator privileges. Group Policy, AppLocker, WDAC, or other endpoint controls can still block the launch; follow the device administrator's policy.
 

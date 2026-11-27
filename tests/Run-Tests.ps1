@@ -23,6 +23,11 @@ try {
     $apacheCombined = Read-ApacheAccessLog @($apachePath,$apachePath2)
     Assert-Equal 4 $apacheCombined.Records.Count 'Apache multiple files concatenate'
     Assert-Equal $apachePath2 $apacheCombined.Records[3].Source 'Apache concatenation preserves source'
+    $rangeStart = [datetime]::ParseExact('2026-11-26 10:00:00','yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
+    $rangeEnd = [datetime]::ParseExact('2026-11-26 10:02:00','yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture)
+    $apacheRange = Select-RecordsInTimeRange $apache.Records $rangeStart $rangeEnd
+    Assert-Equal 3 $apacheRange.Records.Count 'Time range includes both boundary timestamps'
+    Assert-Equal 0 $apacheRange.UntimedCount 'Time range counts untimed records'
 
     $jbossPath = Join-Path $temp 'server.log'
     @('2026-11-26 10:00:01,123 ERROR [org.example] failed','unrecognized') | Set-Content -LiteralPath $jbossPath -Encoding utf8
@@ -58,6 +63,9 @@ try {
     $gcTimedPath = Join-Path $temp 'gc-timed.log'
     '[2026-11-26T10:04:00.000+09:00][info][gc] GC(8) Pause Full 100M->40M(512M) 5.0ms' | Set-Content -LiteralPath $gcTimedPath -Encoding utf8
     $gcTimed = Read-GcLog @($gcPath, $gcTimedPath)
+    $gcRange = Select-RecordsInTimeRange $gcTimed.Records $rangeStart $rangeEnd
+    Assert-Equal 2 $gcRange.Records.Count 'GC time range returns wall-clock records only'
+    Assert-Equal 4 $gcRange.UntimedCount 'GC time range excludes and counts uptime-only records'
 
     $summary = Get-AnalysisSummary $apache.Records $jboss.Records $gc.Records
     Assert-Equal 3 $summary.RequestCount 'Summary request count'
@@ -88,6 +96,12 @@ try {
     if (-not $html.Contains('2026-11-26 10:04:00')) { throw 'GC chart omitted wall-clock time label' }
     if (-not $html.Contains('時刻を記録していないGC停止イベント: 4 件')) { throw 'HTML report omitted untimed pause count' }
     if (-not $html.Contains('時刻を記録していないヒープイベント: 3 件')) { throw 'HTML report omitted untimed heap count' }
+    $rangeHtmlPath = Join-Path $temp 'range-report.html'
+    $rangeSummary = Get-AnalysisSummary $apacheRange.Records $jboss.Records $gcRange.Records
+    Export-AnalysisHtml $rangeSummary $apacheRange.Records $jboss.Records $gcRange.Records $rangeHtmlPath $rangeStart $rangeEnd $gcRange.UntimedCount
+    $rangeHtml = Get-Content -LiteralPath $rangeHtmlPath -Raw
+    if (-not $rangeHtml.Contains('対象期間: 2026-11-26 10:00 〜 2026-11-26 10:02 JST')) { throw 'HTML report omitted selected time range' }
+    if (-not $rangeHtml.Contains('期間内か判別できない時刻なしレコード（GCを含む）: 4 件')) { throw 'HTML report omitted untimed exclusion count' }
     if (-not $html.Contains('class="grid"')) { throw 'HTML report omitted labeled chart grid ticks' }
     if ($html.Contains('failed')) { throw 'HTML report included raw JBoss log text' }
 
@@ -107,7 +121,7 @@ try {
     $launcher = [IO.File]::ReadAllText($launcherPath)
     if ($launcher -notmatch '(?im)^powershell\.exe .*?-ExecutionPolicy Bypass .*?-File "%SCRIPT_PATH%"') { throw 'Launcher must apply process-scoped ExecutionPolicy Bypass' }
     if ($launcher -match '(?im)^\s*Set-ExecutionPolicy\b') { throw 'Launcher must not change a persistent execution policy' }
-    'PASS: 57 assertions'
+    'PASS: 63 assertions'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }
