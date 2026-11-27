@@ -241,45 +241,11 @@ function Export-AnalysisHtml {
     param([object]$Summary,[object[]]$Requests,[object[]]$Events,[object[]]$GcEvents,[string]$Path)
     $reportTime = [DateTimeOffset]::Now.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-dd HH:mm:ss')
     $requestBuckets = @($Requests | Where-Object { $null -ne $_.Time } | Group-Object { $_.Time.ToString('yyyy-MM-dd HH:00') } | Sort-Object Name)
-    $maxCount = 1
-    foreach ($bucket in $requestBuckets) {
-        if ($bucket.Count -gt $maxCount) { $maxCount = $bucket.Count }
-    }
-    $chartBars = foreach ($bucket in $requestBuckets) {
-        $height = [math]::Max(2, [math]::Round(100 * $bucket.Count / $maxCount))
-        $errors = @($bucket.Group | Where-Object { $_.Status -ge 400 }).Count
-        $timeLabel = ConvertTo-SafeHtml $bucket.Name
-        '<div class="hour" title="{0}: {1} requests, {2} HTTP errors"><div class="bar" style="height:{3}%"></div><small>{4}</small></div>' -f $timeLabel, $bucket.Count, $errors, $height, (ConvertTo-SafeHtml $bucket.Name.Substring(11,2))
-    }
     $pauseEvents = @($GcEvents | Where-Object { $null -ne $_.DurationMs })
-    $maxPauseMs = 1.0
-    foreach ($pauseEvent in $pauseEvents) {
-        if ($pauseEvent.DurationMs -gt $maxPauseMs) { $maxPauseMs = $pauseEvent.DurationMs }
-    }
-    $pauseBars = foreach ($pauseEvent in $pauseEvents) {
-        $height = [math]::Max(2, [math]::Round(100 * $pauseEvent.DurationMs / $maxPauseMs))
-        '<div class="hour" title="{0}: {1} ms"><div class="pause-bar" style="height:{2}%"></div><small>{3}</small></div>' -f (ConvertTo-SafeHtml $pauseEvent.Kind), $pauseEvent.DurationMs, $height, (ConvertTo-SafeHtml $pauseEvent.DurationMs)
-    }
     $heapEvents = @($GcEvents | Where-Object { $null -ne $_.HeapAfterMb } | Sort-Object Time)
-    $maxHeapMb = 1.0
-    $heapMarkers = @()
-    $heapPoints = @()
-    foreach ($heapEvent in $heapEvents) {
-        if ($heapEvent.HeapAfterMb -gt $maxHeapMb) { $maxHeapMb = $heapEvent.HeapAfterMb }
-    }
-    if ($heapEvents.Count -gt 0) {
-        $heapMarkers = foreach ($index in 0..($heapEvents.Count - 1)) {
-            $x = if ($heapEvents.Count -eq 1) { 500 } else { [math]::Round(1000 * $index / ($heapEvents.Count - 1)) }
-            $y = [math]::Round(190 - (170 * $heapEvents[$index].HeapAfterMb / $maxHeapMb))
-            $label = '{0}: {1} MB' -f (ConvertTo-SafeHtml $heapEvents[$index].Kind), $heapEvents[$index].HeapAfterMb
-            '<circle cx="{0}" cy="{1}" r="5"><title>{2}</title></circle>' -f $x, $y, $label
-        }
-        $heapPoints = foreach ($index in 0..($heapEvents.Count - 1)) {
-            $x = if ($heapEvents.Count -eq 1) { 500 } else { [math]::Round(1000 * $index / ($heapEvents.Count - 1)) }
-            $y = [math]::Round(190 - (170 * $heapEvents[$index].HeapAfterMb / $maxHeapMb))
-            '{0},{1}' -f $x, $y
-        }
-    }
+    $requestSvg = Get-ReportBarChart $requestBuckets '時間帯別リクエスト数' 'リクエスト数（件/時）' 'hourly'
+    $pauseSvg = Get-ReportBarChart $pauseEvents 'GC停止時間' '停止時間（ms）' 'pause'
+    $heapSvg = Get-ReportHeapChart $heapEvents
     $gcRows = foreach ($gcEvent in @($GcEvents | Sort-Object Time | Select-Object -First 200)) {
         $eventTime = if ($null -ne $gcEvent.Time) { $gcEvent.Time.ToString('yyyy-MM-dd HH:mm:ss.fff') } elseif ($null -ne $gcEvent.ElapsedSeconds) { 'uptime {0}s' -f $gcEvent.ElapsedSeconds } else { 'time unavailable' }
         '<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}/{5} MB</td><td>{6} MB</td><td>{7}</td></tr>' -f (ConvertTo-SafeHtml $eventTime), (ConvertTo-SafeHtml $gcEvent.Kind), (ConvertTo-SafeHtml $gcEvent.Cause), $gcEvent.DurationMs, (ConvertTo-SafeHtml $gcEvent.HeapBeforeMb), (ConvertTo-SafeHtml $gcEvent.HeapAfterMb), (ConvertTo-SafeHtml $gcEvent.HeapCapacityMb), (ConvertTo-SafeHtml ([IO.Path]::GetFileName($gcEvent.Source)))
@@ -292,78 +258,167 @@ function Export-AnalysisHtml {
     }
     $html = @"
 <!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Apache / JBoss ログ分析</title>
-<style>body{font:15px system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#172033}h1{color:#173b65}.cards{display:flex;gap:1rem;flex-wrap:wrap}.card{background:#eef4fa;padding:1rem;border-radius:8px;min-width:130px}.chart{height:190px;display:flex;align-items:end;gap:3px;border-bottom:1px solid #ccd5df;padding:1rem 0}.hour{height:100%;flex:1;display:flex;flex-direction:column;justify-content:end;align-items:center;min-width:12px}.bar{background:#3984bd;width:75%;min-height:2px}.pause-bar{background:#e35d5b;width:75%;min-height:2px}.hour small{font-size:10px;writing-mode:vertical-rl;color:#586575;margin-top:4px}.heap-chart{width:100%;height:220px}.heap-chart polyline{fill:none;stroke:#3984bd;stroke-width:3}.heap-chart circle{fill:#e35d5b}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ccd5df;padding:.5rem;text-align:left}small{color:#586575}</style>
-<h1>Apache / JBoss ログ分析</h1><p>生成日時: $reportTime JST</p><div class="cards">
+<style>body{font:15px/1.55 "Segoe UI",Meiryo,sans-serif;max-width:1200px;margin:0 auto;padding:24px;color:#182b40;background:#f4f7fb}h1{color:#123c62}h2{margin:0 0 .6rem;color:#174b72}.intro,.panel{background:#fff;border:1px solid #dbe4ed;border-radius:12px;padding:20px;margin:16px 0}.muted,small{color:#526579}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.card{background:#edf4fa;border-left:4px solid #2878ad;padding:12px;border-radius:7px}.card b{font-size:1.2rem}.chart{width:100%;height:auto;display:block}.chart text{font:12px "Segoe UI",Meiryo,sans-serif;fill:#34495e}.grid{stroke:#d9e2eb}.axis{stroke:#60758a}.bar{fill:#277eae}.pause{fill:#c94d4d}.heap-line{fill:none;stroke:#277eae;stroke-width:3}.heap-point{fill:#c94d4d}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #dbe4ed;padding:.55rem;text-align:left}th{background:#edf4fa}.table-wrap{overflow:auto;max-height:480px}.note{background:#fff7df;border-left:4px solid #d89d16;padding:12px}.empty{fill:#60758a}.legend{display:inline-block;width:12px;height:12px;margin:0 5px 0 14px;border-radius:2px}.legend-blue{background:#277eae}.legend-red{background:#c94d4d}</style>
+<header class="intro"><h1>Apache / JBoss ログ分析レポート</h1><p>生成日時: $reportTime JST</p><p class="muted">各グラフに軸の値と単位を表示します。</p></header><section class="panel"><h2>概要</h2><div class="cards">
 <div class="card">リクエスト<br><b>$($Summary.RequestCount)</b></div><div class="card">HTTPエラー<br><b>$($Summary.HttpErrors) ($($Summary.HttpErrorRate)%)</b></div><div class="card">p95 応答時間<br><b>$($Summary.P95Ms) ms</b></div><div class="card">JBoss ERROR<br><b>$($Summary.JBossErrors)</b></div><div class="card">フルGC<br><b>$($Summary.FullGcCount) 回</b></div><div class="card">フルGC停止合計<br><b>$($Summary.FullGcPauseMs) ms</b></div><div class="card">GC停止 min / avg / max<br><b>$($Summary.MinGcPauseMs) / $($Summary.AvgGcPauseMs) / $($Summary.MaxGcPauseMs) ms</b></div><div class="card">Full GC間隔 min / max<br><b>$($Summary.MinFullGcIntervalMin) / $($Summary.MaxFullGcIntervalMin) 分</b></div></div>
-<h2>時間帯別リクエスト数</h2><small>棒の高さは時間ごとの件数です。棒にカーソルを合わせるとHTTPエラー数も表示します。</small><div class="chart">$($chartBars -join "`n")</div>
-<h2>GC停止時間</h2><small>赤い棒が個々のGC停止時間です。棒にカーソルを合わせると種別と時間を表示します。</small><div class="chart pause-chart">$($pauseBars -join "`n")</div>
-<h2>GC後ヒープ使用量の推移</h2><small>各点はGC後の使用量です。単位はMB。イベント行の順に並べています。</small><svg class="heap-chart" viewBox="0 0 1000 220" role="img" aria-label="GC後ヒープ使用量">$(if($heapEvents.Count -gt 0){'<polyline points="'+($heapPoints -join ' ')+'"/>' + ($heapMarkers -join '')})</svg>
-<h2>GCイベント詳細</h2><p>平均停止: $($Summary.AvgGcPauseMs) ms / 最大停止: $($Summary.MaxGcPauseMs) ms / Full GC間隔: $($Summary.MinFullGcIntervalMin)〜$($Summary.MaxFullGcIntervalMin) 分</p><table><thead><tr><th>時刻</th><th>種別</th><th>原因</th><th>停止(ms)</th><th>ヒープ前/後(MB)</th><th>最大ヒープ(MB)</th><th>ファイル</th></tr></thead><tbody>$($gcRows -join "`n")</tbody></table>
-<h2>JBossエラー行</h2><p>ログ本文は共有レポートへ含めず、元ファイル名と行番号のみを表示します。</p><table><thead><tr><th>時刻(JST)</th><th>レベル</th><th>ファイル</th><th>行</th></tr></thead><tbody>$($jbossRows -join "`n")</tbody></table>
-<h2>遅延上位リクエスト</h2><small>Apacheログに処理時間がある場合のみ応答時間を集計します。URLのクエリ文字列は除去しています。</small><table><thead><tr><th>時刻</th><th>Method</th><th>Path</th><th>Status</th><th>ms</th></tr></thead><tbody>$($rows -join "`n")</tbody></table>
-<h2>注意</h2><p>時刻の近接は因果関係を示しません。ApacheとJBoss間の相関はリクエストID未確認のため、この初版では自動断定しません。ログ本文は出力していません。</p></html>
+<p class="muted">HTTPエラーは400以上。標準Combinedには応答時間がない場合があります。</p></section><section class="panel"><h2>時間帯別リクエスト数</h2><p class="muted"><span class="legend legend-blue"></span>全リクエスト <span class="legend legend-red"></span>HTTPエラー<br>縦軸: 件/時、横軸: 時刻（JST）。</p>$requestSvg</section><section class="panel"><h2>GC停止時間</h2><p class="muted">縦軸: 停止時間（ms）、横軸: GCイベント番号。</p>$pauseSvg</section><section class="panel"><h2>GC後ヒープ使用量</h2><p class="muted">縦軸: 使用量（MB）、横軸: イベント順。</p>$heapSvg</section>
+<section class="panel"><h2>GCイベント詳細</h2><p>平均停止: $($Summary.AvgGcPauseMs) ms / 最大停止: $($Summary.MaxGcPauseMs) ms / Full GC間隔: $($Summary.MinFullGcIntervalMin)〜$($Summary.MaxFullGcIntervalMin) 分</p><div class="table-wrap"><table><thead><tr><th>時刻</th><th>種別</th><th>原因</th><th>停止(ms)</th><th>ヒープ前/後(MB)</th><th>最大ヒープ(MB)</th><th>ファイル</th></tr></thead><tbody>$($gcRows -join "`n")</tbody></table></div></section><section class="panel"><h2>JBossエラー行</h2><p>本文を含めず、ファイル名と行番号のみ表示します。</p><div class="table-wrap"><table><thead><tr><th>時刻(JST)</th><th>レベル</th><th>ファイル</th><th>行</th></tr></thead><tbody>$($jbossRows -join "`n")</tbody></table></div></section><section class="panel"><h2>遅延上位リクエスト</h2><p>応答時間がある場合のみ表示し、URLクエリを除去します。</p><div class="table-wrap"><table><thead><tr><th>時刻</th><th>Method</th><th>Path</th><th>Status</th><th>ms</th></tr></thead><tbody>$($rows -join "`n")</tbody></table></div></section><section class="panel note"><b>注意</b><p>時刻の近接は因果関係を意味しません。リクエストID未確認のためApache/JBoss間を自動対応付けしません。ログ本文とURLクエリは含めません。</p></section></html>
 "@
     [IO.File]::WriteAllText($Path,$html,[Text.UTF8Encoding]::new($true))
+}
+
+function Get-ReportBarChart {
+    param([object[]]$Items,[string]$Title,[string]$AxisLabel,[string]$Mode)
+    $left=72;$top=22;$plotW=790;$plotH=205;$max=1.0;$values=if($Mode -eq 'hourly'){@($Items|ForEach-Object{[double]$_.Count})}else{@($Items|ForEach-Object{[double]$_.DurationMs})}
+    $values=@($values);if($values.Count -eq 0){return '<svg class="chart" viewBox="0 0 900 300" role="img" aria-label="{0}"><text class="empty" x="80" y="150">対象データがありません</text></svg>' -f (ConvertTo-SafeHtml $Title)}
+    $max=($values|Measure-Object -Maximum).Maximum;if($max -le 0){$max=1};$step=[math]::Max(1,[math]::Ceiling($max/4));$svg=[Collections.Generic.List[string]]::new()
+    for($tick=0;$tick -le $max;$tick+=$step){$y=$top+$plotH-($tick/$max*$plotH);$svg.Add(('<line class="grid" x1="{0}" y1="{1}" x2="{2}" y2="{1}"/><text x="{3}" y="{4}" text-anchor="end">{5}</text>' -f $left,$y,($left+$plotW),($left-10),($y+4),$tick))}
+    $svg.Add(('<text x="16" y="{0}" transform="rotate(-90 16 {0})" text-anchor="middle">{1}</text><text x="{2}" y="{3}" text-anchor="middle">{4}</text>' -f ($top+$plotH/2),(ConvertTo-SafeHtml $AxisLabel),($left+$plotW/2),292,(ConvertTo-SafeHtml $(if($Mode -eq 'hourly'){'時間（JST）'}else{'イベント番号'}))))
+    $slot=$plotW/$values.Count;$barW=[math]::Max(2,$slot*0.64)
+    for($i=0;$i -lt $values.Count;$i++){$x=$left+$slot*$i+($slot-$barW)/2;$barH=$values[$i]/$max*$plotH;$y=$top+$plotH-$barH;$label=if($Mode -eq 'hourly'){$Items[$i].Name.Substring(11,2)}else{[string]($i+1)};$cls=if($Mode -eq 'pause'){'pause'}else{'bar'};$tip=if($Mode -eq 'hourly'){'{0}: {1} 件、HTTPエラー {2} 件' -f $Items[$i].Name,$Items[$i].Count,@($Items[$i].Group|Where-Object Status -ge 400).Count}else{'{0}: {1} ms' -f $label,$values[$i]};$svg.Add(('<rect class="{0}" x="{1}" y="{2}" width="{3}" height="{4}"><title>{5}</title></rect><text x="{6}" y="{7}" text-anchor="middle">{8}</text>' -f $cls,$x,$y,$barW,[math]::Max(1,$barH),(ConvertTo-SafeHtml $tip),($x+$barW/2),($top+$plotH+18),(ConvertTo-SafeHtml $label)))}
+    return '<svg class="chart" data-kind="{0}" viewBox="0 0 900 300" role="img" aria-label="{1}">{2}</svg>' -f $(if($Mode -eq 'pause'){'pause-chart'}else{'hourly-chart'}),(ConvertTo-SafeHtml $Title),($svg -join '')
+}
+
+function Get-ReportHeapChart {
+    param([object[]]$Items)
+    $left=72;$top=22;$plotW=790;$plotH=205
+    if($Items.Count -eq 0){return '<svg class="chart heap-chart" viewBox="0 0 900 300"><text class="empty" x="80" y="150">ヒープ情報がありません</text></svg>'}
+    $max=($Items|ForEach-Object{[double]$_.HeapAfterMb}|Measure-Object -Maximum).Maximum;if($max -le 0){$max=1};$step=[math]::Max(1,[math]::Ceiling($max/4));$svg=[Collections.Generic.List[string]]::new();for($tick=0;$tick -le $max;$tick+=$step){$y=$top+$plotH-($tick/$max*$plotH);$svg.Add(('<line class="grid" x1="{0}" y1="{1}" x2="{2}" y2="{1}"/><text x="{3}" y="{4}" text-anchor="end">{5} MB</text>' -f $left,$y,($left+$plotW),($left-10),($y+4),$tick))}
+    $points=[Collections.Generic.List[string]]::new();$marks=[Collections.Generic.List[string]]::new();$slot=if($Items.Count -eq 1){0}else{$plotW/($Items.Count-1)};for($i=0;$i -lt $Items.Count;$i++){$x=$left+$(if($Items.Count -eq 1){$plotW/2}else{$slot*$i});$y=$top+$plotH-([double]$Items[$i].HeapAfterMb/$max*$plotH);$points.Add(('{0},{1}' -f $x,$y));$marks.Add(('<circle class="heap-point" cx="{0}" cy="{1}" r="4"><title>{2} MB</title></circle>' -f $x,$y,$Items[$i].HeapAfterMb))}
+    $svg.Add('<polyline class="heap-line" points="'+($points -join ' ')+'"/>');$svg.AddRange([string[]]$marks.ToArray());$svg.Add(('<text x="16" y="{0}" transform="rotate(-90 16 {0})" text-anchor="middle">ヒープ使用量（MB）</text><text x="{1}" y="292" text-anchor="middle">GCイベント順（時刻）</text>' -f ($top+$plotH/2),($left+$plotW/2)));return '<svg class="chart heap-chart" viewBox="0 0 900 300">{0}</svg>' -f ($svg -join '')
 }
 
 function Show-LogAnalyzerGui {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $form = [Windows.Forms.Form]::new()
-    $form.Text = 'Apache / JBoss Log Analyzer'
-    $form.Size = [Drawing.Size]::new(850, 600)
+    $form.Text = 'Apache / JBoss ログ分析'
+    $form.Size = [Drawing.Size]::new(980, 760)
+    $form.MinimumSize = [Drawing.Size]::new(850, 650)
     $form.StartPosition = 'CenterScreen'
+    $form.Font = [Drawing.Font]::new('Segoe UI', 9)
+    $layout = [Windows.Forms.TableLayoutPanel]::new()
+    $layout.Dock = 'Fill'
+    $layout.Padding = [Windows.Forms.Padding]::new(18)
+    $layout.ColumnCount = 1
+    $layout.RowCount = 5
+    foreach ($rowStyle in @([Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('Percent', 55), [Windows.Forms.RowStyle]::new('AutoSize'), [Windows.Forms.RowStyle]::new('Absolute', 54), [Windows.Forms.RowStyle]::new('Percent', 45))) { $layout.RowStyles.Add($rowStyle) | Out-Null }
+    $form.Controls.Add($layout)
+    $intro = [Windows.Forms.Label]::new()
+    $intro.Text = 'ログ種別ごとに複数ファイルを追加し、まとめて解析します。ファイルは一覧の順に読み込みます。'
+    $intro.AutoSize = $true
+    $intro.Padding = [Windows.Forms.Padding]::new(0, 0, 0, 12)
+    $layout.Controls.Add($intro, 0, 0)
     $inputs = @{}
-    $types = @('Apache access logs','JBoss server logs','Java GC logs')
-    for ($index = 0; $index -lt $types.Count; $index++) {
-        $y = 16 + (40 * $index)
-        $label = [Windows.Forms.Label]::new()
-        $label.Text = $types[$index]
-        $label.Location = [Drawing.Point]::new(16, $y + 4)
-        $label.Size = [Drawing.Size]::new(150, 24)
-        $form.Controls.Add($label)
-        $box = [Windows.Forms.TextBox]::new()
-        $box.Location = [Drawing.Point]::new(170, $y)
-        $box.Size = [Drawing.Size]::new(500, 24)
-        $form.Controls.Add($box)
-        $inputs[$index] = $box
-        $button = [Windows.Forms.Button]::new()
-        $button.Text = 'Browse...'
-        $button.Location = [Drawing.Point]::new(680, $y - 2)
-        $button.Tag = $index
-        $button.Add_Click({
-            $dialog = [Windows.Forms.OpenFileDialog]::new()
-            $dialog.Multiselect = $true
-            if ($dialog.ShowDialog() -eq 'OK') { $inputs[[int]$this.Tag].Text = $dialog.FileNames -join ';' }
-        }.GetNewClosure())
-        $form.Controls.Add($button)
+    $captions = @('Apache アクセスログ', 'JBoss サーバーログ', 'Java GCログ')
+    $tabs = [Windows.Forms.TabControl]::new()
+    $tabs.Dock = 'Fill'
+    $layout.Controls.Add($tabs, 0, 1)
+    for ($index = 0; $index -lt 3; $index++) {
+        $page = [Windows.Forms.TabPage]::new($captions[$index])
+        $tabs.TabPages.Add($page)
+        $grid = [Windows.Forms.TableLayoutPanel]::new()
+        $grid.Dock = 'Fill'
+        $grid.Padding = [Windows.Forms.Padding]::new(10)
+        $grid.ColumnCount = 2
+        $grid.RowCount = 2
+        $grid.ColumnStyles.Add([Windows.Forms.ColumnStyle]::new('Percent', 100)) | Out-Null
+        $grid.ColumnStyles.Add([Windows.Forms.ColumnStyle]::new('Absolute', 125)) | Out-Null
+        $grid.RowStyles.Add([Windows.Forms.RowStyle]::new('Percent', 100)) | Out-Null
+        $grid.RowStyles.Add([Windows.Forms.RowStyle]::new('Absolute', 44)) | Out-Null
+        $page.Controls.Add($grid)
+        $list = [Windows.Forms.ListBox]::new()
+        $list.Dock = 'Fill'
+        $list.SelectionMode = 'MultiExtended'
+        $list.HorizontalScrollbar = $true
+        $list.IntegralHeight = $false
+        $grid.Controls.Add($list, 0, 0)
+        $inputs[$index] = $list
+        $buttons = [Windows.Forms.FlowLayoutPanel]::new()
+        $buttons.Dock = 'Fill'
+        $buttons.FlowDirection = 'TopDown'
+        $buttons.WrapContents = $false
+        $grid.Controls.Add($buttons, 1, 0)
+        $addButton = [Windows.Forms.Button]::new()
+        $addButton.Text = 'ログを追加…'
+        $addButton.Width = 105
+        $addButton.Tag = $index
+        $addButton.Add_Click({ $dialog = [Windows.Forms.OpenFileDialog]::new(); $dialog.Multiselect = $true; $dialog.Title = $captions[[int]$this.Tag] + ' を追加'; if ($dialog.ShowDialog($form) -eq 'OK') { foreach ($file in $dialog.FileNames) { if (-not $inputs[[int]$this.Tag].Items.Contains($file)) { [void]$inputs[[int]$this.Tag].Items.Add($file) } } } }.GetNewClosure())
+        $buttons.Controls.Add($addButton)
+        $removeButton = [Windows.Forms.Button]::new()
+        $removeButton.Text = '選択を削除'
+        $removeButton.Width = 105
+        $removeButton.Tag = $index
+        $removeButton.Add_Click({ $targetList = $inputs[[int]$this.Tag]; foreach ($file in @($targetList.SelectedItems)) { [void]$targetList.Items.Remove($file) } }.GetNewClosure())
+        $buttons.Controls.Add($removeButton)
+        $clearButton = [Windows.Forms.Button]::new()
+        $clearButton.Text = 'すべて削除'
+        $clearButton.Width = 105
+        $clearButton.Tag = $index
+        $clearButton.Add_Click({ $inputs[[int]$this.Tag].Items.Clear() }.GetNewClosure())
+        $buttons.Controls.Add($clearButton)
+        $hint = [Windows.Forms.Label]::new()
+        $hint.Text = 'Ctrl / Shift で複数選択'
+        $hint.AutoSize = $true
+        $hint.Padding = [Windows.Forms.Padding]::new(4, 8, 0, 0)
+        $grid.Controls.Add($hint, 0, 1)
     }
+    $destinationRow = [Windows.Forms.FlowLayoutPanel]::new()
+    $destinationRow.Dock = 'Fill'
+    $destinationRow.WrapContents = $false
+    $destinationRow.Padding = [Windows.Forms.Padding]::new(0, 5, 0, 5)
+    $layout.Controls.Add($destinationRow, 0, 2)
+    $destinationLabel = [Windows.Forms.Label]::new()
+    $destinationLabel.Text = '出力先'
+    $destinationLabel.AutoSize = $true
+    $destinationLabel.Padding = [Windows.Forms.Padding]::new(0, 7, 0, 0)
+    $destinationRow.Controls.Add($destinationLabel)
+    $destinationPath = [Windows.Forms.TextBox]::new()
+    $destinationPath.ReadOnly = $true
+    $destinationPath.Width = 650
+    $destinationPath.Text = [Environment]::GetFolderPath('Desktop')
+    $destinationRow.Controls.Add($destinationPath)
+    $chooseButton = [Windows.Forms.Button]::new()
+    $chooseButton.Text = 'フォルダー選択…'
+    $chooseButton.Add_Click({ $dialog = [Windows.Forms.FolderBrowserDialog]::new(); $dialog.SelectedPath = $destinationPath.Text; if ($dialog.ShowDialog($form) -eq 'OK') { $destinationPath.Text = $dialog.SelectedPath } }.GetNewClosure())
+    $destinationRow.Controls.Add($chooseButton)
     $output = [Windows.Forms.TextBox]::new()
     $output.Multiline = $true
+    $output.ReadOnly = $true
     $output.ScrollBars = 'Vertical'
-    $output.Location = [Drawing.Point]::new(16, 140)
-    $output.Size = [Drawing.Size]::new(790, 350)
-    $form.Controls.Add($output)
-    $run = [Windows.Forms.Button]::new()
-    $run.Text = 'Analyze and export report'
-    $run.Location = [Drawing.Point]::new(16, 510)
-    $run.Add_Click({
+    $output.Dock = 'Fill'
+    $output.BackColor = [Drawing.Color]::White
+    $layout.Controls.Add($output, 0, 4)
+    $runButton = [Windows.Forms.Button]::new()
+    $runButton.Text = '解析してHTML / CSVを出力'
+    $runButton.Height = 38
+    $runButton.Dock = 'Fill'
+    $runButton.BackColor = [Drawing.Color]::FromArgb(32, 105, 155)
+    $runButton.ForeColor = [Drawing.Color]::White
+    $runButton.FlatStyle = 'Flat'
+    $layout.Controls.Add($runButton, 0, 3)
+    $runButton.Add_Click({
         try {
-            $apacheResult = Read-ApacheAccessLog @($inputs[0].Text -split ';' | Where-Object { $_ })
-            $jbossResult = Read-JBossLog @($inputs[1].Text -split ';' | Where-Object { $_ })
-            $gcResult = Read-GcLog @($inputs[2].Text -split ';' | Where-Object { $_ })
+            $paths = @{}
+            foreach ($index in 0..2) { $paths[$index] = @($inputs[$index].Items | ForEach-Object { [string]$_ }); foreach ($file in $paths[$index]) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "ファイルが見つかりません: $file" } } }
+            if (($paths.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum -eq 0) { throw '少なくとも1つのログファイルを追加してください。' }
+            if (-not (Test-Path -LiteralPath $destinationPath.Text -PathType Container)) { throw '出力先フォルダーが見つかりません。' }
+            $runButton.Enabled = $false
+            $form.Cursor = 'WaitCursor'
+            $output.Text = '解析しています…'
+            $apacheResult = Read-ApacheAccessLog $paths[0]
+            $jbossResult = Read-JBossLog $paths[1]
+            $gcResult = Read-GcLog $paths[2]
             $summary = Get-AnalysisSummary $apacheResult.Records $jbossResult.Records $gcResult.Records
-            $outDir = [Environment]::GetFolderPath('Desktop')
-            Export-AnalysisHtml $summary $apacheResult.Records $jbossResult.Records $gcResult.Records (Join-Path $outDir 'apache-jboss-report.html')
-            Export-AnalysisCsv $apacheResult.Records (Join-Path $outDir 'requests.csv')
-            Export-AnalysisCsv @($jbossResult.Records | Select-Object Time,Level,Source,Line) (Join-Path $outDir 'jboss-events.csv')
-            Export-AnalysisCsv @($gcResult.Records | Select-Object Time,ElapsedSeconds,Kind,Cause,DurationMs,HeapBeforeMb,HeapAfterMb,HeapCapacityMb,Source,Line) (Join-Path $outDir 'gc-events.csv')
+            $outputFolder = $destinationPath.Text
+            Export-AnalysisHtml $summary $apacheResult.Records $jbossResult.Records $gcResult.Records (Join-Path $outputFolder 'apache-jboss-report.html')
+            Export-AnalysisCsv $apacheResult.Records (Join-Path $outputFolder 'requests.csv')
+            Export-AnalysisCsv @($jbossResult.Records | Select-Object Time, Level, Source, Line) (Join-Path $outputFolder 'jboss-events.csv')
+            Export-AnalysisCsv @($gcResult.Records | Select-Object Time, ElapsedSeconds, Kind, Cause, DurationMs, HeapBeforeMb, HeapAfterMb, HeapCapacityMb, Source, Line) (Join-Path $outputFolder 'gc-events.csv')
             $issueCount = $apacheResult.Issues.Count + $jbossResult.Issues.Count + $gcResult.Issues.Count
-            $output.Text = "Completed`r`nRequests: $($summary.RequestCount)`r`nHTTP errors: $($summary.HttpErrors)`r`nJBoss errors: $($summary.JBossErrors)`r`nFull GC: $($summary.FullGcCount)`r`nUnrecognized rows: $issueCount`r`nHTML report and 3 CSV files were written to Desktop."
-        } catch { $output.Text = $_.Exception.Message }
+            $output.Text = "解析完了`r`nリクエスト: $($summary.RequestCount) / HTTPエラー: $($summary.HttpErrors)`r`nJBoss ERROR/FATAL: $($summary.JBossErrors) / Full GC: $($summary.FullGcCount)`r`n未認識行: $issueCount`r`n`r`n出力先: $outputFolder`r`napache-jboss-report.html`r`nrequests.csv / jboss-events.csv / gc-events.csv"
+        } catch { $output.Text = "解析に失敗しました`r`n$($_.Exception.Message)" } finally { $runButton.Enabled = $true; $form.Cursor = 'Default' }
     }.GetNewClosure())
-    $form.Controls.Add($run)
     [void]$form.ShowDialog()
 }
-
 if ($MyInvocation.InvocationName -ne '.') { Show-LogAnalyzerGui }

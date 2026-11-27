@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 ### Changed
 ### Fixed
+
+## [0.4.0] - 2026-11-27
+
+### Added
+- ログ種別ごとに複数ファイルを追加・削除できるGUIと、レポート出力先の選択機能。
+- リクエスト数、GC停止時間、GC後ヒープの値・単位・横軸説明を備えたSVGグラフ。
+### Changed
+- GUIをタブと一覧中心に整理し、出力先と解析結果を分かりやすく表示。
+- HTMLレポートを概要、軸ラベル付きグラフ、詳細表、注意事項で構成。
 
 ## [0.3.0] - 2026-11-27
 
