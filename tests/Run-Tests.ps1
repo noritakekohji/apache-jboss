@@ -75,7 +75,12 @@ try {
     $emptySummary = Get-AnalysisSummary @() @() @()
     Export-AnalysisHtml $emptySummary @() @() @() $emptyHtml
     if (-not (Test-Path -LiteralPath $emptyHtml)) { throw 'Empty inputs should still produce an HTML report' }
-    'PASS: 40 assertions'
+
+    $launcherPath = Join-Path $PSScriptRoot '..\Start-ApacheJbossLogAnalyzer.bat'
+    $launcher = [IO.File]::ReadAllText($launcherPath)
+    if ($launcher -notmatch '(?im)^powershell\.exe .*?-ExecutionPolicy Bypass .*?-File "%SCRIPT_PATH%"') { throw 'Launcher must apply process-scoped ExecutionPolicy Bypass' }
+    if ($launcher -match '(?im)^\s*Set-ExecutionPolicy\b') { throw 'Launcher must not change a persistent execution policy' }
+    'PASS: 42 assertions'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

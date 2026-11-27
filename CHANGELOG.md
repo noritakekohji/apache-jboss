@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 ### Fixed
 
+## [0.3.0] - 2026-11-27
+
+### Added
+- Windows起動用バッチファイル。子プロセス限定のExecutionPolicy Bypassで起動し、永続設定は変更しない。
+
 ## [0.2.0] - 2026-11-27
 
 ### Added
