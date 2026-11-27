@@ -97,6 +97,13 @@ try {
     if (-not $html.Contains('合計 3 件')) { throw 'Five-minute bucket did not aggregate requests' }
     if (-not $html.Contains('HTTPエラー 1 件')) { throw 'Five-minute request chart omitted error count' }
     if (-not $html.Contains('完全一致重複行を除外: 0 行')) { throw 'HTML report omitted duplicate count' }
+    $latencyStart = $html.IndexOf('<h2>遅延上位リクエスト</h2>')
+    $latencyEnd = $html.IndexOf('<section class="panel note">',$latencyStart)
+    $latencySection = $html.Substring($latencyStart,$latencyEnd-$latencyStart)
+    if (-not $latencySection.Contains('125.000')) { throw 'HTML latency table omitted milliseconds' }
+    if (-not $latencySection.Contains('/home')) { throw 'HTML latency table omitted timed request path' }
+    if ($latencySection.Contains('/standard')) { throw 'HTML latency table included request without response time' }
+    if (-not $latencySection.Contains('応答時間あり: 1 件')) { throw 'HTML latency table omitted timed request count' }
     if (-not $html.Contains('停止時間（ms）')) { throw 'HTML report omitted GC pause axis units' }
     if (-not $html.Contains('ヒープ使用量（MB）')) { throw 'HTML report omitted heap axis units' }
     if (-not $html.Contains('横軸: 時刻（JST）')) { throw 'HTML report omitted GC time axis explanation' }
@@ -110,6 +117,12 @@ try {
     if (-not $rangeHtml.Contains('対象期間: 2026-11-26 10:00 〜 2026-11-26 10:02 JST')) { throw 'HTML report omitted selected time range' }
     if (-not $rangeHtml.Contains('期間内か判別できない時刻なしレコード（GCを含む）: 4 件')) { throw 'HTML report omitted untimed exclusion count' }
     if (-not $rangeHtml.Contains('完全一致重複行を除外: 3 行')) { throw 'HTML report omitted duplicate exclusion count' }
+    $noTimingHtmlPath = Join-Path $temp 'no-timing-report.html'
+    $noTimingSummary = Get-AnalysisSummary @($apache.Records | Where-Object { $null -eq $_.DurationMs }) $jboss.Records $gcTimed.Records
+    Export-AnalysisHtml $noTimingSummary @($apache.Records | Where-Object { $null -eq $_.DurationMs }) $jboss.Records $gcTimed.Records $noTimingHtmlPath
+    $noTimingHtml = Get-Content -LiteralPath $noTimingHtmlPath -Raw
+    if (-not $noTimingHtml.Contains('p95 応答時間<br><b>記録なし</b>')) { throw 'HTML report did not clarify unavailable response time' }
+    if (-not $noTimingHtml.Contains('応答時間を記録したリクエストがありません')) { throw 'HTML report did not explain missing Apache timing field' }
     if (-not $html.Contains('class="grid"')) { throw 'HTML report omitted labeled chart grid ticks' }
     $denseRequests = for($minute=0;$minute -lt 60;$minute+=5){[pscustomobject]@{Time=$rangeStart.AddHours(1).AddMinutes($minute);Status=200;DurationMs=10;Url='/test';Method='GET'}}
     $denseBuckets = @($denseRequests | Group-Object { $_.Time.AddMinutes(-($_.Time.Minute % 5)).ToString('yyyy-MM-dd HH:mm') } | Sort-Object Name)
@@ -135,7 +148,7 @@ try {
     $launcher = [IO.File]::ReadAllText($launcherPath)
     if ($launcher -notmatch '(?im)^powershell\.exe .*?-ExecutionPolicy Bypass .*?-File "%SCRIPT_PATH%"') { throw 'Launcher must apply process-scoped ExecutionPolicy Bypass' }
     if ($launcher -match '(?im)^\s*Set-ExecutionPolicy\b') { throw 'Launcher must not change a persistent execution policy' }
-    'PASS: 75 assertions'
+    'PASS: 81 assertions'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

@@ -13,7 +13,7 @@ Double-click `Start-ApacheJbossLogAnalyzer.bat`. Add one or more files in each l
 
 The launcher starts `powershell.exe` with `-ExecutionPolicy Bypass` for that process only. It does not change machine or user execution-policy settings and does not request administrator privileges. Group Policy, AppLocker, WDAC, or other endpoint controls can still block the launch; follow the device administrator's policy.
 
-Apache response-time statistics require an optional trailing duration field in seconds. Standard Combined logs usually do not include that field.
+Apache response-time statistics require an optional trailing duration field in seconds. Standard Combined logs usually do not include that field. The HTML latency table lists only requests with a parsed duration, in milliseconds; when none are present, it explains that the Apache log format needs a response-time field.
 
 ## GC analysis
 
